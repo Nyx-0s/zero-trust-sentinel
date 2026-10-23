@@ -6,5 +6,8 @@
 # which wakes the instance (cold start ~30-60s).
 run = "uvicorn api:app --host 0.0.0.0 --port 8080"
 entrypoint = "api.py"
-modules = ["python-3.11"]
+modules = ["web", "python-3.12", "bash"]
 hidden = [".config"]
+
+[nix]
+channel = "stable-25_05"
