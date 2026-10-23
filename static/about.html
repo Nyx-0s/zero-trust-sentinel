@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Company | Zero-Trust Sentinel</title>
+    <meta name="description" content="Why Zero-Trust Sentinel exists: continuous external attack surface monitoring built on evidence, restraint, and a standard we hold ourselves to.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="platform/index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="platform/risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="platform/remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="platform/reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="threat-center/index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="threat-center/php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="threat-center/emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="threat-center/readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="chaos.html">Chaos</a>
+            <a href="crew.html">Crew</a>
+            <a href="pricing.html">Pricing</a>
+            <a href="about.html">Company</a>
+            <a href="contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="index.html">Home</a><span class="sep">/</span><span>Company</span>
+</div>
+
+<section class="hero">
+    <div class="container prose">
+        <span class="eyebrow">Company</span>
+        <h1>We think most companies are one honest measurement from being fine</h1>
+        <p class="lead">Security spending rises every year, and the question boards ask most &mdash; <em>are we exposed?</em> &mdash; still tends to be answered with a feeling. We built Sentinel to replace the feeling with a date-stamped observation.</p>
+        <p class="lead">Not to sell fear. To remove it.</p>
+        <p class="lead"><strong>You are probably fine. That is exactly the problem.</strong> So the company has a second half: <a href="chaos.html">Mischief</a> &mdash; scoped adversarial engagements that test that assumption instead of trusting it.</p>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">Principles</span><h2>The standard we hold ourselves to</h2></div>
+        <div class="grid grid-2">
+            <div class="card reveal">
+                <div class="card-icon">&#128269;</div>
+                <h3>Evidence beats claims</h3>
+                <p>Every finding names the observation that produced it. If we did not see it on your public surface, it does not appear in your report &mdash; enforced by a Critic pass that exists to cut unsupported statements.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#9878;</div>
+                <h3>Restraint is a feature</h3>
+                <p>Public data only. No exploitation, no intrusive testing, no login attempts. It keeps assessments safe to share with customers and auditors, and it keeps us inside the line every responsible scanner respects. Offensive engagements run under a different, explicitly authorized rule set &mdash; the operating rules below.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#128200;</div>
+                <h3>Findings come with fixes</h3>
+                <p>A vulnerability list without a next action is a liability with extra steps. Every report carries prioritized, paste-ready remediation and a way to prove it worked.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#128737;</div>
+                <h3>Plain language, business stakes</h3>
+                <p>Executives should not need a decoder ring. Each risk is written as impact: what it costs, who it affects, why it matters this quarter.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container prose">
+        <span class="eyebrow">Why now</span>
+        <h2>The outside view changed faster than the inside view</h2>
+        <p>Attack tooling has become cheap enough that a lone operator can run what used to require a team, and this month's disclosures &mdash; a critical PHP pair, a certificate authority compromise, AI-agent-driven intrusions at named enterprises &mdash; arrived within seventy-two hours of one another.</p>
+        <p>Most internal security programs were built to watch what the organization knows about: the assets on the inventory, the servers with agents. The perimeter does not care about the inventory. Subdomains appear, certificates rotate, staging environments leak into public DNS on a Tuesday afternoon.</p>
+        <p><strong>Zero-Trust Sentinel watches the side of you that strangers already see</strong> &mdash; continuously, in minutes rather than quarters, with output a board can read and an engineer can act on.</p>
+        <div class="btn-row">
+            <a class="btn btn-primary" href="index.html#scan-section">See your outside view</a>
+            <a class="btn btn-ghost" href="threat-center/index.html">Read the Threat Center</a>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Operating rules</span>
+            <h2>The constitution the crew runs under</h2>
+            <p class="lead muted">Chaos is only useful if it stays inside lines drawn in advance. Four rules govern every Mischief engagement &mdash; written before, not during.</p>
+        </div>
+        <div class="grid grid-2 steps">
+            <div class="card step reveal">
+                <h3>Scope is authorized once</h3>
+                <p>One-time human act: you approve the authorized targets, the blast radius, and the emergency stop. Everything after that happens inside those boundaries &mdash; autonomously, on the record.</p>
+            </div>
+            <div class="card step reveal">
+                <h3>The hard boundary</h3>
+                <p>No action outside authorized scope, without an engagement, or without an evidence record. If scope cannot be confirmed mid-run, the run stops and asks &mdash; it never guesses.</p>
+            </div>
+            <div class="card step reveal">
+                <h3>Stop first, report second</h3>
+                <p>Scope exceeded, target deauthorized, real incident risk, or your emergency stop: the run halts immediately. The report then explains exactly what stopped it and where it stood.</p>
+            </div>
+            <div class="card step reveal">
+                <h3>Humans touch the exception queue</h3>
+                <p>The engine handles the routine; people handle only the exceptions &mdash; a boundary question, an incident signal, a decision that needs a human signature.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">What we will not do</span><h2>Lines we do not cross</h2></div>
+        <div class="grid grid-3">
+            <div class="card reveal">
+                <h3>No inflated threats</h3>
+                <p class="small">We do not claim mass exploitation, coordinated campaigns, or that you are under attack without evidence specific to that claim. Fear that a prospect can disprove costs us the relationship.</p>
+            </div>
+            <div class="card reveal">
+                <h3>No intrusive scanning</h3>
+                <p class="small">We do not exploit, brute-force or log in to anything. Your assessment uses only what any member of the public could see.</p>
+            </div>
+            <div class="card reveal">
+                <h3>No invented findings</h3>
+                <p class="small">Every claim in every report traces to an observation on your surface. Unverifiable statements are removed before you see them.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <h2>Judge us by the first report</h2>
+            <p class="lead muted">The free assessment is the whole product, up front. If the evidence is not there, you will know in two minutes.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="index.html#scan-section">Get Your Free Risk Score</a>
+                <a class="btn btn-secondary btn-lg" href="contact.html">Contact us</a>
+            </div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="platform/index.html">Overview</a></li>
+                    <li><a href="platform/risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="platform/remediation.html">Remediation Plans</a></li>
+                    <li><a href="platform/reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="threat-center/index.html">Current Window</a></li>
+                    <li><a href="threat-center/php2shell.html">PHP2Shell</a></li>
+                    <li><a href="threat-center/emudhra.html">eMudhra CA</a></li>
+                    <li><a href="threat-center/readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="pricing.html">Pricing</a></li>
+                    <li><a href="chaos.html">Chaos as a Service</a></li>
+                    <li><a href="crew.html">The Crew</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="assets/js/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PHP2Shell (CVE-2026-109618 / CVE-2026-109619) | Zero-Trust Sentinel Threat Center</title>
+    <meta name="description" content="PHP2Shell: two critical PHP vulnerabilities patched 21 October 2026. Affected versions, fixed releases, exploitation status, and how to confirm your exposure.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="../platform/index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="../platform/risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="../platform/remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="../platform/reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="../chaos.html">Chaos</a>
+            <a href="../crew.html">Crew</a>
+            <a href="../pricing.html">Pricing</a>
+            <a href="../about.html">Company</a>
+            <a href="../contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="../index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="../index.html">Home</a><span class="sep">/</span><a href="index.html">Threat Center</a><span class="sep">/</span><span>PHP2Shell</span>
+</div>
+
+<section class="hero">
+    <div class="container prose">
+        <span class="pill danger">Advisory &middot; patched 21 October 2026</span>
+        <h1 style="margin-top:1rem;">PHP2Shell</h1>
+        <p class="lead">Two critical vulnerabilities in the PHP interpreter that can lead to unauthenticated remote code execution. PHP describes them as out-of-memory/request-state corruption and stale request state / use-after-free.</p>
+        <div class="btn-row">
+            <a class="btn btn-primary" href="../index.html#scan-section">Check my PHP exposure</a>
+            <a class="btn btn-ghost" href="readiness.html">Readiness checklist</a>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">The facts</span><h2>What is known, as published</h2></div>
+        <div class="table-wrap reveal">
+            <table class="corporate">
+                <tbody>
+                    <tr><td><strong>CVEs</strong></td><td>CVE-2026-109618 and CVE-2026-109619</td></tr>
+                    <tr><td><strong>Disclosed</strong></td><td>21 October 2026 (PHP release notice, NCSC advisory)</td></tr>
+                    <tr><td><strong>Fixed versions</strong></td><td>8.5.12, 8.4.27, 8.3.36, 8.2.35 (source backports also supplied for EOL 7.4, 8.0, 8.1)</td></tr>
+                    <tr><td><strong>In scope</strong></td><td>All PHP installations serving web requests: PHP-FPM, Apache <code>mod_php</code>, <code>php-cgi</code>, FrankenPHP, LiteSpeed. PHP notes <code>mod_php</code> as especially exposed.</td></tr>
+                    <tr><td><strong>Exploitation status</strong></td><td>Mixed reporting, by source and timestamp: Sophos cites an attempt reported by Amazon Threat Intelligence on 17 October and later attempts; CISA's 21 October alert stated it had not observed exploitation at publication; Huntress likewise reported no observation on its systems at its stated update times.</td></tr>
+                    <tr><td><strong>Official guidance</strong></td><td>CISA and NCSC urged immediate inventory and patching, with systems that could not be patched promptly taken offline where feasible.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout warn">
+            <strong>Read the exploitation row carefully.</strong> "Attempts reported by some vendors" and "no observation as of publication by CISA" are both accurate statements from different telemetry at different times. We publish both because a board briefing that picks only one is not a briefing &mdash; it is a pitch.
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">Your exposure</span><h2>How to answer "are we patched?" today</h2></div>
+        <div class="grid grid-3">
+            <div class="step reveal">
+                <h3>Inventory what is public</h3>
+                <p>You cannot patch what you have not found. Internet-facing PHP hides in admin panels, microsites, and legacy apps on forgotten subdomains.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Confirm the runtime version</h3>
+                <p>Check each instance against the fixed releases above &mdash; including PHP behind a CDN or reverse proxy, where the version is not visible from the outside.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Prove it, date it</h3>
+                <p>Record the version, the patch date and the asset owner. That record is what converts a panic into a process.</p>
+            </div>
+        </div>
+
+        <div class="callout good" style="max-width:860px;">
+            <strong>What Sentinel checks for you:</strong> our assessment enumerates your public hosts, fingerprints services and versions where they are exposed, and flags PHP-adjacent exposures alongside certificate-chain health. If your perimeter shows material findings, the report names them with the host that produced each one.
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container prose">
+        <span class="eyebrow">Sources</span>
+        <h2>Where this came from</h2>
+        <ul class="small muted">
+            <li>PHP release notice, 21 October 2026 (php.net archive)</li>
+            <li>NCSC advisory on the critical security issue affecting PHP</li>
+            <li>CISA alert: Critical Vulnerabilities in PHP Require Immediate Patching (21 October 2026)</li>
+            <li>Sophos security advisory on the PHP flaws; Huntress technical analysis</li>
+        </ul>
+        <p class="small muted">Bleeding-edge CVE identifiers move fast and details get corrected. Follow the primary advisories for authoritative version data before patching production.</p>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <h2>Find out what of yours is public</h2>
+            <p class="lead muted">Free, non-intrusive, about two minutes.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="../index.html#scan-section">Get Your Free Risk Score</a>
+            </div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="../platform/index.html">Overview</a></li>
+                    <li><a href="../platform/risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="../platform/remediation.html">Remediation Plans</a></li>
+                    <li><a href="../platform/reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="index.html">Current Window</a></li>
+                    <li><a href="php2shell.html">PHP2Shell</a></li>
+                    <li><a href="emudhra.html">eMudhra CA</a></li>
+                    <li><a href="readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="../pricing.html">Pricing</a></li>
+                    <li><a href="../chaos.html">Chaos as a Service</a></li>
+                    <li><a href="../crew.html">The Crew</a></li>
+                    <li><a href="../about.html">About</a></li>
+                    <li><a href="../contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

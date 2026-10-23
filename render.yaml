@@ -1,0 +1,105 @@
+# =============================================================================
+# Zero-Trust Sentinel - Render.com Blueprint
+#
+# Three services, exactly as the architecture needs them:
+#   1. Web Service     - api.py (API + Digital Twin /simulate) + static cockpit
+#   2. Background Worker - outbound engine ("Voice") + Harvey ("Brain") + daily win-back
+#   3. Render Postgres - clients, reports, trajectories, subscriptions, events
+#
+# Deploy: Render dashboard -> New -> Blueprint -> point at this repo. Then fill
+# the secret env vars (sync: false below) in each service's Environment page.
+#
+# Plan notes:
+#   - Postgres starts at Starter ($7/mo): Render's Free databases EXPIRE 30 days
+#     after creation, which is fine for experiments and not for production.
+#   - Web/Worker on Starter ($7 each) do not sleep. The Free web plan sleeps
+#     after inactivity (bad for PayPal webhooks), and the Free worker plan
+#     spins down too - the autonomous pipeline wants always-on.
+#   - First Docker build is heavy (Go toolchain + nuclei templates); expect a
+#     long initial deploy.
+# =============================================================================
+
+services:
+  # ---- 1. The "Weapon" + "Cockpit" ----------------------------------------
+  - type: web
+    name: sentinel-web
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sentinel-db
+          property: connectionString
+      - key: sentinel-secrets
+        fromGroup: sentinel-secrets
+
+  # ---- 2. The "Brain" + "Voice" -------------------------------------------
+  # Render "Web Services" are for HTTP; this Background Worker runs 24/7 and
+  # owns outbound_engine.py, harvey run, and the daily win-back pass.
+  - type: worker
+    name: sentinel-worker
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Overrides the image CMD (uvicorn) with the worker entrypoint.
+    dockerCommand: bash worker.sh
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sentinel-db
+          property: connectionString
+      - key: sentinel-secrets
+        fromGroup: sentinel-secrets
+
+# ---- 3. The "Memory" -------------------------------------------------------
+databases:
+  - name: sentinel-db
+    databaseName: sentinel
+    plan: starter
+    region: oregon
+
+# Secrets live in one group shared by both services. Every entry is
+# sync: false, so Render prompts you to type the real value in the dashboard -
+# nothing secret ever sits in this file. DATABASE_URL is NOT here: it is wired
+# per-service from the database above.
+envVarGroups:
+  - name: sentinel-secrets
+    envVars:
+      - key: GROQ_API_KEY          # LangGraph swarm (Analyst/Editor/Critic)
+        sync: false
+      - key: RESEND_API_KEY        # outbound engine (the "Voice")
+        sync: false
+      - key: FROM_EMAIL
+        sync: false
+      - key: ANTHROPIC_API_KEY     # harvey/claude (the "Brain"); worker skips Harvey without it
+        sync: false
+      - key: PAYPAL_MODE           # live | sandbox
+        sync: false
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_SECRET
+        sync: false
+      - key: PAYPAL_PLAN_ID        # the $49/mo subscription plan
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID     # enables signature verification on /webhook/paypal
+        sync: false
+      - key: STRIPE_SECRET_KEY     # optional - PayPal is the payment path
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: SITE_URL              # public URL of the web service (harvey train, checkout redirects)
+        sync: false
+      - key: MAX_EMAILS_PER_DAY
+        value: "20"
+      - key: JITTER_MIN_SECONDS
+        value: "60"
+      - key: JITTER_MAX_SECONDS
+        value: "120"
+      - key: SKIP_HARVEY           # set to 1 to run the worker outbound-only
+        value: "0"

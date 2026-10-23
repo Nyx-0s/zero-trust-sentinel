@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Platform Overview | Zero-Trust Sentinel</title>
+    <meta name="description" content="How Zero-Trust Sentinel maps, scores and defends your external attack surface - an autonomous scan pipeline with a human-grade analysis graph.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="../threat-center/index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="../threat-center/php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="../threat-center/emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="../threat-center/readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="../chaos.html">Chaos</a>
+            <a href="../crew.html">Crew</a>
+            <a href="../pricing.html">Pricing</a>
+            <a href="../about.html">Company</a>
+            <a href="../contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="../index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="../index.html">Home</a><span class="sep">/</span><span>Platform</span>
+</div>
+
+<section class="hero">
+    <div class="container prose">
+        <span class="eyebrow">Platform Overview</span>
+        <h1>One pipeline: map, score, defend</h1>
+        <p class="lead">Sentinel runs the same playbook a senior consultant would &mdash; enumeration, probing, validation, interpretation, remediation &mdash; as an autonomous swarm that finishes in minutes and repeats continuously.</p>
+        <div class="btn-row">
+            <a class="btn btn-primary" href="../index.html#scan-section">Run it on your domain</a>
+            <a class="btn btn-ghost" href="risk-scoring.html">How scoring works</a>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Stage 1</span>
+            <h2>Discovery: what actually exists</h2>
+            <p class="lead muted">You cannot defend an asset you never listed. Sentinel starts where an attacker starts.</p>
+        </div>
+        <div class="grid grid-3">
+            <div class="card reveal">
+                <div class="card-icon">&#127760;</div>
+                <h3>Subdomain enumeration</h3>
+                <p>Passive and active sources are merged into a full map of your apex &mdash; including the staging boxes and forgotten microsites nobody remembered.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#128268;</div>
+                <h3>Live host probing</h3>
+                <p>Every candidate is probed for a real response, so the report reflects reachable services, not DNS noise.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#128274;</div>
+                <h3>TLS &amp; chain analysis</h3>
+                <p>Certificate validity, issuer chains and weak parameters are checked on every host &mdash; the check that matters most during a CA incident.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Stage 2</span>
+            <h2>Analysis: findings become decisions</h2>
+            <p class="lead muted">Raw output from scanners is worthless to a board. Our four-role analysis graph turns it into judgment.</p>
+        </div>
+        <div class="grid grid-4">
+            <div class="step reveal">
+                <h3>Analyst</h3>
+                <p>Reads the raw scan, discards false positives, and ranks what is genuinely exposed.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Fixer</h3>
+                <p>Translates each confirmed finding into a concrete, copy-paste remediation.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Editor</h3>
+                <p>Rewrites everything into plain business language with money-focused impact.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Critic</h3>
+                <p>Challenges the draft: unsupported claims are cut. Evidence beats assertions.</p>
+            </div>
+        </div>
+        <div class="callout" style="max-width:820px;">
+            <strong>The Critic is the point.</strong> Any vendor can generate a long list of CVEs. The discipline of removing what you cannot prove is what makes a report safe to put in front of an auditor.
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Stage 3</span>
+            <h2>Defense: posture that stays true</h2>
+        </div>
+        <div class="grid grid-3">
+            <div class="card reveal">
+                <h3>Continuous re-scanning</h3>
+                <p>Your surface changes daily &mdash; new DNS records, new certificates, new subdomains. Sentinel re-scans so the score you publish remains defensible.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Prioritized remediation</h3>
+                <p>Fixes arrive ordered by business impact, not by CVSS theater. See <a href="remediation.html">Remediation Plans</a>.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Evidence on demand</h3>
+                <p>Every assessment produces a white-label PDF you can hand to a customer, auditor or board. See <a href="reporting.html">Board Reporting</a>.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <h2>See the pipeline run against your domain</h2>
+            <p class="lead muted">The first assessment is free and takes about two minutes.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="../index.html#scan-section">Get Your Free Risk Score</a>
+            </div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="index.html">Overview</a></li>
+                    <li><a href="risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="remediation.html">Remediation Plans</a></li>
+                    <li><a href="reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="../threat-center/index.html">Current Window</a></li>
+                    <li><a href="../threat-center/php2shell.html">PHP2Shell</a></li>
+                    <li><a href="../threat-center/emudhra.html">eMudhra CA</a></li>
+                    <li><a href="../threat-center/readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="../pricing.html">Pricing</a></li>
+                    <li><a href="../chaos.html">Chaos as a Service</a></li>
+                    <li><a href="../crew.html">The Crew</a></li>
+                    <li><a href="../about.html">About</a></li>
+                    <li><a href="../contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

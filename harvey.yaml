@@ -1,0 +1,118 @@
+# =============================================================================
+# Zero-Trust Sentinel - Harvey Configuration
+# Schema matches ethanplusai/harvey (github.com/ethanplusai/harvey).
+# Secrets (.env) and machine-local overrides belong in harvey.local.yaml.
+# The Discovery Signals list lives in harvey_discovery.md (loaded as a skill);
+# it is mirrored in comments below so this file stays loader-safe for any
+# Pydantic strictness setting.
+# =============================================================================
+
+persona:
+  name: "Harvey"
+  company: "Zero-Trust Sentinel"
+  role: "Principal Security Architect"
+  email: ""            # your From address (or set in harvey.local.yaml)
+  linkedin: ""
+  tone: "measured, authoritative, concise; a Principal Security Architect with 15 years in Fortune 500 risk management - consultant, never marketer"
+  # The Hook (use verbatim where a one-line opener fits):
+  # "Most companies don't know what their external attack surface looks like
+  #  until it's compromised. I can show you in 30 seconds."
+
+product:
+  name: "Zero-Trust Sentinel"
+  description: >
+    Automated External Attack Surface Monitoring for SMBs, positioned for
+    Black October readiness: an AI agent swarm scans a domain, translates
+    technical findings into top-3 business risks, and delivers copy-paste
+    remediation fixes. Reports in minutes, not weeks.
+  pricing: "$49/mo (annual $490/yr)"
+  key_benefits:
+    - "30-second external risk score - your Black October readiness baseline"
+    - "Checks your perimeter against this month's advisories (PHP2Shell CVE-2026-109618/619, eMudhra CA)"
+    - "External attack surface scanned 24/7, no agents to install"
+    - "Top 3 business risks in plain English with money-focused impact"
+    - "Copy-paste fixes for nginx, DNS, and cloud configs"
+    - "White-label PDF risk assessment for your board or customers"
+  objection_responses:
+    "we're already secure": "Fair - and your internal team may well be. The gap this week exposed is the EXTERNAL view: the PHP2Shell patches (CVE-2026-109618/619, released 21 October) and the eMudhra CA chain affect internet-facing assets that internal tools rarely inventory. Our agent scans the outside view 24/7 so your team doesn't have to."
+    "we're patching already": "Good. The question is whether you can see every internet-facing asset that needs the patch - PHP behind a CDN, a forgotten staging host, a cert issued from the affected CA. Our scan lists what is actually public, in 30 seconds."
+    "too expensive": "It's $49/mo. Less than the cost of one hour of a senior engineer's time, and it runs continuously."
+    "already have a solution": "That makes sense. Curious: does your current tooling tell you the business impact of what it finds, or just CVE lists?"
+    "not interested": "No worries at all. Your free risk score stays available at any time, no credit card."
+  offer:
+    primary: "Free Risk Score + $49/mo Monitoring"
+    entry: "Free risk score for your domain - no credit card, no agent install"
+    tripwire: "First 72 Hours Free: Black October Emergency Monitoring"
+    goal: "get_reply"
+    booking_method: "suggest_times"
+    booking_url: ""
+    meeting_duration: "15 minutes"
+    meeting_owner: ""
+
+icp:
+  industries:
+    - "B2B SaaS"
+    - "Fintech"
+    - "E-commerce"
+  company_size: "10-50 employees"
+  titles:
+    - "CTO"
+    - "CISO"
+    - "Head of Engineering"
+    - "Founder"
+    - "VP Engineering"
+  geography:
+    - "United States"
+    - "United Kingdom"
+    - "Europe"
+    - "Australia"
+    - "Singapore"
+  # Roles that signal a company is in-market RIGHT NOW.
+  hiring_signals:
+    - "Security Engineer"
+    - "DevSecOps"
+    - "Application Security"
+
+# DISCOVERY SIGNALS (full playbook in harvevy_discovery.md - see skills/):
+#   exposed_api        - company has a public /docs or /api endpoint
+#   staging_exposed    - staging. or dev. subdomain resolves publicly
+#   outdated_security  - "Security" or "Trust" page older than 12 months
+#   running_ads        - active Google Ads (they are buying traffic; uptime matters)
+#   custom_domain      - branded domain in production (SaaS, not a side project)
+# Harvey must confirm at least 2 signals before submitting a lead to Sentinel.
+
+channels:
+  email:
+    enabled: true
+    provider: "smtp"    # gmail | microsoft | smtp | instantly
+    max_daily_sends: 15 # warm-up friendly; raise to 50 only after 72h clean
+    require_approval: true   # you review every send in the Outbox
+    send_to_risky: false     # never mail catch-all inboxes
+    max_bounce_rate: 0.01    # stricter than provider limits
+    warmup:
+      start_date: ""     # YYYY-MM-DD; blank = no ramp
+      min_days: 14
+      start_sends: 5
+      daily_increase: 3
+      dkim_selector: ""
+  linkedin:
+    enabled: false       # explicit opt-in only
+    max_daily_connections: 20
+    max_daily_messages: 10
+
+usage:
+  max_daily_claude_percent: 80
+  heartbeat_interval_minutes: 15
+  quiet_hours:
+    start: "22:00"
+    end: "07:00"
+  timezone: "Asia/Kolkata"
+
+compliance:
+  postal_address: ""     # REQUIRED before any cold send (CAN-SPAM): your address
+  opt_out_line: 'Not interested? Reply "no thanks" and I won''t email again.'
+  precleared:
+    enabled: false
+    sender_country: ""
+    address_source: "unknown"
+    prospect_country: ""

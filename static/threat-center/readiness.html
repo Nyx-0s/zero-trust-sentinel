@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>30-Minute Readiness Checklist | Zero-Trust Sentinel Threat Center</title>
+    <meta name="description" content="A practical checklist for security and engineering leaders: the questions you will be asked this week, and the evidence that answers each one.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="../platform/index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="../platform/risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="../platform/remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="../platform/reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="../chaos.html">Chaos</a>
+            <a href="../crew.html">Crew</a>
+            <a href="../pricing.html">Pricing</a>
+            <a href="../about.html">Company</a>
+            <a href="../contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="../index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="../index.html">Home</a><span class="sep">/</span><a href="index.html">Threat Center</a><span class="sep">/</span><span>Readiness Checklist</span>
+</div>
+
+<section class="hero">
+    <div class="container prose">
+        <span class="eyebrow">Readiness Checklist</span>
+        <h1>Thirty minutes, five questions, one paper trail</h1>
+        <p class="lead">You will be asked these questions this week &mdash; by your board, your biggest customer, or your own team. Each one is answerable with evidence. Here is the evidence to collect, in order.</p>
+        <div class="btn-row">
+            <a class="btn btn-primary" href="../index.html#scan-section">Start with the free assessment</a>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">The checklist</span><h2>What to confirm, and what proves it</h2></div>
+
+        <div class="steps" style="max-width:860px;">
+            <div class="step reveal">
+                <h3>"Do we run PHP anywhere on the public internet?"</h3>
+                <p><strong>Prove it with:</strong> a full list of public hosts and their detected stacks. Admin panels, legacy apps and forgotten subdomains are where unpatched PHP hides. <a href="php2shell.html">PHP2Shell briefing &rarr;</a></p>
+                <p class="small muted">Sentinel check: host discovery + service fingerprinting on your apex.</p>
+            </div>
+            <div class="step reveal">
+                <h3>"Are we on the fixed PHP versions?"</h3>
+                <p><strong>Prove it with:</strong> version per host, patched date, owner. Fixed releases are 8.5.12, 8.4.27, 8.3.36 and 8.2.35 &mdash; with backports for end-of-life branches. <a href="php2shell.html">Details &rarr;</a></p>
+                <p class="small muted">Sentinel check: version exposure reported per host where publicly observable.</p>
+            </div>
+            <div class="step reveal">
+                <h3>"Do any of our certificates chain through the affected CA?"</h3>
+                <p><strong>Prove it with:</strong> issuer and chain for every public endpoint, cross-referenced against the revoked intermediates. <a href="emudhra.html">eMudhra briefing &rarr;</a></p>
+                <p class="small muted">Sentinel check: TLS and chain analysis on every live host in the scan.</p>
+            </div>
+            <div class="step reveal">
+                <h3>"What actually is exposed to the outside?"</h3>
+                <p><strong>Prove it with:</strong> a dated external assessment &mdash; not an internal inventory. The outside view includes the staging box nobody remembered and the DNS record added last Tuesday.</p>
+                <p class="small muted">Sentinel check: the full risk score, with findings ranked by business impact.</p>
+            </div>
+            <div class="step reveal">
+                <h3>"What is the plan, and who owns it?"</h3>
+                <p><strong>Prove it with:</strong> a prioritized remediation list with owners and dates, plus a re-scan date to confirm closure. A plan without a verification step is a wish.</p>
+                <p class="small muted">Sentinel check: remediation appendix in the PDF, then re-scan to move the score.</p>
+            </div>
+        </div>
+
+        <div class="callout" style="max-width:860px;">
+            <strong>One sentence that survives the meeting:</strong> "We assessed our external surface on 23 October, during the active advisory window; findings and owners are attached; we re-scan on the date shown." Everything above exists to make that sentence true.
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">During a crisis window</span><h2>How to communicate without inflating</h2></div>
+        <div class="grid grid-2">
+            <div class="card reveal">
+                <h3>Do</h3>
+                <p class="small">Lead with dates and sources. State what you verified and what you have not yet checked. Separate the advisories &mdash; they are different problems. Give a next checkpoint with a time attached.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Don't</h3>
+                <p class="small">Merge unrelated incidents into one story. Claim mass exploitation without a source and a timestamp. Say a system is affected before you have looked at it. Overstate today, and tomorrow's correction becomes the story.</p>
+            </div>
+        </div>
+        <p class="small muted" style="max-width:860px;">This guidance mirrors the discipline we hold our own reports to: every claim carries an observation, a source, and a date &mdash; or it does not ship.</p>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <h2>Answer all five, with evidence</h2>
+            <p class="lead muted">The free assessment covers the external-view questions in about two minutes.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="../index.html#scan-section">Get Your Free Risk Score</a>
+                <a class="btn btn-secondary btn-lg" href="../platform/reporting.html">See the board report</a>
+            </div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="../platform/index.html">Overview</a></li>
+                    <li><a href="../platform/risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="../platform/remediation.html">Remediation Plans</a></li>
+                    <li><a href="../platform/reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="index.html">Current Window</a></li>
+                    <li><a href="php2shell.html">PHP2Shell</a></li>
+                    <li><a href="emudhra.html">eMudhra CA</a></li>
+                    <li><a href="readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="../pricing.html">Pricing</a></li>
+                    <li><a href="../chaos.html">Chaos as a Service</a></li>
+                    <li><a href="../crew.html">The Crew</a></li>
+                    <li><a href="../about.html">About</a></li>
+                    <li><a href="../contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

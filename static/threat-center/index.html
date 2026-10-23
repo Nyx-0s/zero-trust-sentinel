@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Threat Center | Zero-Trust Sentinel</title>
+    <meta name="description" content="Current security advisory window: PHP2Shell, the eMudhra certificate authority compromise, and AI-agent intrusions - sourced, dated, and what to do about each.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="../platform/index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="../platform/risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="../platform/remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="../platform/reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="../chaos.html">Chaos</a>
+            <a href="../crew.html">Crew</a>
+            <a href="../pricing.html">Pricing</a>
+            <a href="../about.html">Company</a>
+            <a href="../contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="../index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="../index.html">Home</a><span class="sep">/</span><span>Threat Center</span>
+</div>
+
+<section class="hero">
+    <div class="container hero-split">
+        <div>
+            <span class="pill danger">Active advisory window &middot; October 2026</span>
+            <h1 style="margin-top:1rem;">The Threat Center</h1>
+            <p class="lead">Short, sourced briefings on what security teams are being asked about right now. Every claim carries a date and a source; anything unverified is labeled as such.</p>
+            <p class="lead">This is what we read before we write your report &mdash; published so you can read it too.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="../index.html#scan-section">Check Your Exposure</a>
+                <a class="btn btn-ghost btn-lg" href="readiness.html">Run the readiness checklist</a>
+            </div>
+        </div>
+        <div class="hero-panel">
+            <div class="panel-title">Window status</div>
+            <table class="corporate" style="border:1px solid var(--line);border-radius:8px;overflow:hidden;">
+                <tbody>
+                    <tr><td><strong>PHP2Shell</strong></td><td><span class="pill danger">Patching</span></td></tr>
+                    <tr><td><strong>eMudhra CA</strong></td><td><span class="pill warn">Monitoring</span></td></tr>
+                    <tr><td><strong>AI-agent intrusions</strong></td><td><span class="pill neutral">Reported</span></td></tr>
+                </tbody>
+            </table>
+            <p class="small muted" style="margin-top:1rem;margin-bottom:0;">Labels reflect the posture recommended for each issue, not a severity score assigned by us.</p>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Briefings</span>
+            <h2>Three things worth your attention</h2>
+        </div>
+        <div class="grid grid-3">
+            <a class="card clickable reveal" href="php2shell.html">
+                <span class="pill danger">CVE-2026-109618 / 619</span>
+                <h3 style="margin-top:.8rem;">PHP2Shell</h3>
+                <p>Two critical PHP interpreter flaws patched on 21 October. All PHP serving web requests is in scope; <code>mod_php</code> is described as especially exposed.</p>
+                <p class="small muted">Fixed in 8.5.12, 8.4.27, 8.3.36, 8.2.35 &rarr;</p>
+            </a>
+            <a class="card clickable reveal" href="emudhra.html">
+                <span class="pill warn">CVE-2026-111943</span>
+                <h3 style="margin-top:.8rem;">eMudhra CA key compromise</h3>
+                <p>Eight intermediate certificate authority private keys found recoverable. Go's trust denylist shipped as the mitigation. Your existing certificates may chain to an affected issuer.</p>
+                <p class="small muted">How to audit your chains &rarr;</p>
+            </a>
+            <a class="card clickable reveal" href="readiness.html">
+                <span class="pill">Checklist</span>
+                <h3 style="margin-top:.8rem;">30-minute readiness check</h3>
+                <p>The questions you will be asked this week, and the Sentinel check that answers each one with evidence.</p>
+                <p class="small muted">Open the checklist &rarr;</p>
+            </a>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Context</span>
+            <h2>Why this window feels different</h2>
+        </div>
+        <div class="container" style="padding:0;">
+            <div class="timeline">
+                <div class="item reveal">
+                    <div class="when">19 October 2026</div>
+                    <h3>AI-agent intrusions reported</h3>
+                    <p>Reuters published an investigation into one attacker using AI agents to breach scores of sites via exposed instances, naming John Deere, SharkNinja and Cummins. Company statements qualified the impact &mdash; but the cost of running an attack has collapsed.</p>
+                </div>
+                <div class="item reveal">
+                    <div class="when">21 October 2026</div>
+                    <h3>PHP fixes released; CISA urges immediate patching</h3>
+                    <p>PHP shipped fixes for CVE-2026-109618 and CVE-2026-109619. CISA's alert told organizations to inventory PHP and patch; it stated no exploitation had been observed as of its publication, while other vendors reported attempts. Both things are true &mdash; and both belong in your briefing.</p>
+                </div>
+                <div class="item reveal">
+                    <div class="when">21 October 2026</div>
+                    <h3>eMudhra certificate authority compromise detailed</h3>
+                    <p>Revocations and a Go trust denylist (CVE-2026-111943) followed the discovery that eight intermediate CA keys were recoverable. Cisco Talos reported no in-the-wild misuse as of 14:00 UTC that day.</p>
+                </div>
+                <div class="item reveal">
+                    <div class="when">22 October 2026</div>
+                    <h3>"Black October" enters the vocabulary</h3>
+                    <p>A widely shared post named the preceding 48 hours. Security coverage was quick to note that many of the underlying intrusions had been running for months before anyone said the words aloud.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="callout" style="max-width:860px;">
+            <strong>What we will not do:</strong> claim your company is under attack, that these issues are being mass-exploited at scale, or that any specific customer is affected &mdash; without evidence specific to that claim. Exaggerated fear is easy to disprove, and disproving it costs the trust we need to protect you. We would rather hand you a date-stamped fact and a working fix.
+        </div>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <span class="eyebrow">From reading to knowing</span>
+            <h2>Stop wondering which of these touches you</h2>
+            <p class="lead muted">A free Sentinel assessment checks your public surface &mdash; including the certificate chains and exposed services these advisories are about &mdash; in about two minutes.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="../index.html#scan-section">Get Your Free Risk Score</a>
+                <a class="btn btn-secondary btn-lg" href="readiness.html">Open the checklist</a>
+            </div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="../platform/index.html">Overview</a></li>
+                    <li><a href="../platform/risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="../platform/remediation.html">Remediation Plans</a></li>
+                    <li><a href="../platform/reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="index.html">Current Window</a></li>
+                    <li><a href="php2shell.html">PHP2Shell</a></li>
+                    <li><a href="emudhra.html">eMudhra CA</a></li>
+                    <li><a href="readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="../pricing.html">Pricing</a></li>
+                    <li><a href="../chaos.html">Chaos as a Service</a></li>
+                    <li><a href="../crew.html">The Crew</a></li>
+                    <li><a href="../about.html">About</a></li>
+                    <li><a href="../contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

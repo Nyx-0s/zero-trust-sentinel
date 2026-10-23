@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero-Trust Sentinel | External Attack Surface Monitoring for B2B</title>
+    <meta name="description" content="Continuous external attack surface monitoring for modern B2B companies. First risk score free in 2 minutes: business-impact findings, copy-paste fixes, then $1.99 per score or $49/month.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="platform/index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="platform/risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="platform/remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="platform/reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="threat-center/index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="threat-center/php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="threat-center/emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="threat-center/readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="chaos.html">Chaos</a>
+            <a href="crew.html">Crew</a>
+            <a href="pricing.html">Pricing</a>
+            <a href="about.html">Company</a>
+            <a href="contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+
+<!-- ======================= HERO ======================= -->
+<section class="hero">
+    <div class="container hero-split">
+        <div>
+            <span class="pill danger">Active advisory window &middot; October 2026</span>
+            <h1 style="margin-top:1rem;">You feel safe because nobody interesting has tried anything. We fix that.</h1>
+            <p class="lead">Critical PHP flaws are being patched under pressure. A certificate authority chain is in question. Boards are asking a question their internal tools cannot answer: <strong>what does the outside world see when it looks at us?</strong></p>
+            <p class="lead">Zero-Trust Sentinel continuously monitors your external attack surface, translates every finding into business impact, and hands your team the fix &mdash; your first score free, in about two minutes. No agents. No consultants. And when a measurement is not enough, the <a href="chaos.html">Mischief crew</a> attacks your assumptions inside a scope you authorize once &mdash; evidence on the record.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="#scan-section">Get Your Free Risk Score</a>
+                <a class="btn btn-ghost btn-lg" href="threat-center/index.html">Open the Threat Center</a>
+            </div>
+            <div class="trust-strip">
+                <span>First scan free &mdash; all of it</span>
+                <span>Report in ~2 minutes</span>
+                <span>Public data only, no intrusive testing</span>
+            </div>
+        </div>
+
+        <div class="hero-panel">
+            <div class="panel-title">Posture at a glance</div>
+            <div class="grid" style="gap:1rem;">
+                <div class="stat">
+                    <div class="num">2m</div>
+                    <div class="label">First score free: domain to scored, prioritized findings</div>
+                </div>
+                <hr style="border:none;border-top:1px solid var(--line);margin:.4rem 0;">
+                <div class="stat">
+                    <div class="num">24/7</div>
+                    <div class="label">Continuous re-scanning as your surface changes</div>
+                </div>
+                <hr style="border:none;border-top:1px solid var(--line);margin:.4rem 0;">
+                <div class="stat">
+                    <div class="num">0</div>
+                    <div class="label">Agents to install &middot; nothing touches your network</div>
+                </div>
+            </div>
+            <div class="callout warn" style="margin-bottom:0;">
+                <strong>Why now:</strong> organizations are being asked to prove external exposure this week, not next quarter. A score today is evidence tomorrow.
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= FEAR / CONTEXT ======================= -->
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head center">
+            <span class="eyebrow">The current window</span>
+            <h2>Three disclosures. One unanswered question.</h2>
+            <p class="lead muted">Everything below is documented and dated. Nothing here is speculation &mdash; which is precisely the standard we hold our own reports to.</p>
+        </div>
+
+        <div class="grid grid-3">
+            <div class="card reveal">
+                <div class="card-icon">&#9889;</div>
+                <span class="pill danger">CVE-2026-109618 / 619</span>
+                <h3 style="margin-top:.8rem;">PHP2Shell</h3>
+                <p>Two critical PHP interpreter flaws, patched 21 October. Every PHP instance serving web traffic is in scope; <code>mod_php</code> is described as especially exposed. CISA urged immediate inventory and patching.</p>
+                <p class="small muted">If you cannot list every internet-facing PHP host you run, you cannot confirm you are patched.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#128279;</div>
+                <span class="pill warn">CVE-2026-111943</span>
+                <h3 style="margin-top:.8rem;">eMudhra CA compromise</h3>
+                <p>Eight intermediate certificate authority private keys were found recoverable. Go's mitigation shipped as a trust denylist. Certificates you issued months ago may now chain to a suspect root.</p>
+                <p class="small muted">Your scanners do not check this. Ours does &mdash; certificate chains are part of every assessment.</p>
+            </div>
+            <div class="card reveal">
+                <div class="card-icon">&#128737;</div>
+                <span class="pill neutral">Industry reporting</span>
+                <h3 style="margin-top:.8rem;">AI-agent intrusions</h3>
+                <p>Reuters reported one attacker using AI agents to breach scores of sites through exposed instances, with named victims including John Deere, SharkNinja and Cummins. The economics of attack just collapsed.</p>
+                <p class="small muted">What used to cost a team now costs a subscription. The defense has to be continuous.</p>
+            </div>
+        </div>
+
+        <div class="callout" style="max-width:860px;margin:2rem auto 0;">
+            <strong>Our position:</strong> fear is a reasonable response to an unmeasured risk. It stops being reasonable the moment you measure yours. Sentinel turns "are we next?" into a number, a list, and a plan &mdash; in about two minutes, and the first look is free.
+        </div>
+    </div>
+</section>
+
+<!-- ======================= HOW IT WORKS ======================= -->
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">How Sentinel protects</span>
+            <h2>From exposed to defended in three moves</h2>
+            <p class="lead muted">An autonomous agent swarm scans from the outside, an analyst graph interprets the results, and your team receives exactly what to fix first.</p>
+        </div>
+        <div class="grid grid-3 steps">
+            <div class="step reveal">
+                <h3>We scan the perimeter</h3>
+                <p>Subdomain enumeration, live host probing, vulnerability templates and TLS analysis &mdash; run from the public internet, exactly like an attacker would, without touching your systems.</p>
+            </div>
+            <div class="step reveal">
+                <h3>We translate to business risk</h3>
+                <p>Our Analyst &rarr; Fixer &rarr; Editor &rarr; Critic graph converts raw findings into your top three business risks in plain English, with money-focused impact statements a CFO can read.</p>
+            </div>
+            <div class="step reveal">
+                <h3>We hand you the fix</h3>
+                <p>Copy-paste remediation for nginx, DNS and cloud configs, a white-label PDF for your board, and continuous re-scanning so the posture you publish stays true.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= SCAN + REPORT (live flow) ======================= -->
+<section class="section section-alt" id="scan">
+    <div class="container">
+        <div class="section-head center">
+            <span class="eyebrow">First scan &middot; always free</span>
+            <h2>Your free risk score report in 2 minutes</h2>
+            <p class="lead muted">Enter a domain and your work email. Non-intrusive, public data only &mdash; and the first time, all of it is free: score, findings, fixes. After that the free tier downgrades: your next score is $1.99, or free for as long as monitoring is active.</p>
+        </div>
+
+        <div id="scan-section" class="card scan-box" style="max-width:760px;margin:0 auto;">
+            <h3>External Risk Assessment</h3>
+            <p class="muted small">The scan is permission-respectful: no exploitation, no login attempts, no traffic beyond what any visitor could send.</p>
+            <p class="small"><strong>First scan: 100% free</strong> &mdash; score, findings, fixes in about two minutes. Then the free tier downgrades: $1.99 per score, $9.99 for the full report, or never downgraded on monitoring.</p>
+            <div class="scan-input">
+                <input type="text" id="domain-input" placeholder="yourcompany.com" autocomplete="off">
+                <input type="email" id="email-input" placeholder="you@company.com" autocomplete="email">
+                <button class="btn btn-primary" id="scan-btn" onclick="startScan()">Run Assessment</button>
+            </div>
+            <p id="scan-status">Enter a domain. Your first score is free.</p>
+        </div>
+
+        <div id="score-lock" class="card scan-box" style="display:none;max-width:760px;margin:0 auto;border-color:var(--danger);">
+            <span class="pill danger">Free tier downgraded</span>
+            <h3 style="margin-top:.9rem;">Your free score for <span id="lock-domain"></span> is spent</h3>
+            <div id="lock-score" style="display:none;">
+                <div class="stat" style="margin:.9rem 0 .3rem;">
+                    <div class="num" id="lock-score-num">--</div>
+                    <div class="label" id="lock-score-date"></div>
+                </div>
+                <p class="small">That number was true the moment we measured it. Perimeters move daily &mdash; new subdomains, new certificates, new CVEs. You are looking at a photograph of a live problem, and the free tier does not develop film twice.</p>
+            </div>
+            <p id="lock-actual" class="small" style="display:none;">The first scan for this domain has been used. Free is a first impression, not a subscription &mdash; you had yours.</p>
+            <p class="small muted">From here: <strong>$1.99</strong> per score in about 120 seconds, <strong>$9.99</strong> for the full report with copy-paste fixes &mdash; or monitoring, where the free tier never downgrades again.</p>
+            <div class="btn-row">
+                <button class="btn btn-primary" onclick="openUnlock('score')">Unlock my next score &mdash; $1.99</button>
+                <button class="btn btn-secondary" onclick="openCheckout()">Monitoring &mdash; $49/mo</button>
+            </div>
+            <p class="small muted" style="margin-bottom:0;">Or <a href="#scan-section" onclick="backToScan()">scan a different domain</a> &mdash; its first score is always free.</p>
+        </div>
+
+        <div id="report-section" class="card report-card" style="max-width:760px;margin:1.5rem auto 0;">
+            <h3>Your Risk Posture</h3>
+            <div class="gauge-wrap">
+                <svg width="160" height="160" viewBox="0 0 120 120" role="img" aria-label="Risk score gauge">
+                    <circle cx="60" cy="60" r="52" fill="none" stroke="#e7e5e4" stroke-width="10"></circle>
+                    <circle id="gauge-arc" cx="60" cy="60" r="52" fill="none" stroke="#15803d" stroke-width="10"
+                            stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"
+                            transform="rotate(-90 60 60)"></circle>
+                    <text id="score-display" x="60" y="66" text-anchor="middle"
+                          font-size="28" font-weight="700" fill="#0f172a" font-family="Inter, sans-serif">--</text>
+                </svg>
+            </div>
+            <div class="gauge-label">Score (0&ndash;100)</div>
+            <div id="threat-badge" class="threat-badge"><span class="dot"></span><span id="threat-badge-text"></span></div>
+            <p id="badge-note" class="badge-note"></p>
+            <p id="verdict" class="verdict"></p>
+            <div id="risk-details"></div>
+            <button class="btn btn-primary btn-lg" style="margin-top:1.25rem;" onclick="openCheckout()">Subscribe for $49/mo</button>
+            <p class="small muted" style="margin-top:.75rem;">First 72 Hours Free &middot; Black October Emergency Monitoring &middot; cancel anytime &middot; every score after your first is free while subscribed</p>
+        </div>
+
+        <!-- ==================== DIGITAL TWIN (subscribers) ================= -->
+        <div id="digital-twin" class="card report-card" style="max-width:760px;margin:1.5rem auto 0;display:none;">
+            <span class="pill neutral">Digital Twin &middot; swarm-modeled</span>
+            <h3 style="margin-top:.9rem;">What happens next &mdash; simulated</h3>
+            <p class="small muted">We don't just scan your perimeter; we simulate its survival: 50 attack rounds modeled from your real findings, with the trajectory if you fix them. Projections, labeled as models &mdash; every assumption ships with the numbers.</p>
+
+            <div id="twin-locked" style="display:none;">
+                <div class="grid" style="gap:.8rem;margin:1rem 0;grid-template-columns:repeat(2,1fr);">
+                    <div class="stat"><div class="num">--</div><div class="label">Time to detect</div></div>
+                    <div class="stat"><div class="num">--</div><div class="label">Time to contain</div></div>
+                    <div class="stat"><div class="num">--</div><div class="label">Modeled revenue exposure</div></div>
+                    <div class="stat"><div class="num">--</div><div class="label">Reputational score drop</div></div>
+                </div>
+                <p class="small">Your score shows what is exposed right now. It does not show what that exposure <em>becomes</em>: the dwell time before anyone notices, the outage, the revenue walking out during it. The Digital Twin runs 50 attack rounds against your measured findings and shows you the trajectory &mdash; and what it becomes when you patch.</p>
+                <p class="small muted">Part of Continuous Monitoring ($49/mo). Projections are models built on your real scan &mdash; never invented findings.</p>
+                <button class="btn btn-primary" onclick="openCheckout()">Simulate my perimeter &mdash; $49/mo</button>
+            </div>
+
+            <div id="twin-body" style="display:none;">
+                <div class="grid" style="gap:.8rem;margin:1rem 0;grid-template-columns:repeat(2,1fr);">
+                    <div class="stat"><div class="num" id="twin-detect">--</div><div class="label">Median time to detect</div></div>
+                    <div class="stat"><div class="num" id="twin-contain">--</div><div class="label">Median time to contain</div></div>
+                    <div class="stat"><div class="num" id="twin-loss" style="color:var(--danger);">--</div><div class="label">Modeled median revenue exposure</div></div>
+                    <div class="stat"><div class="num" id="twin-rep">--</div><div class="label">Reputational score drop</div></div>
+                </div>
+
+                <h4 style="text-align:left;font-size:1rem;">Breach trajectory &mdash; <span id="twin-scenario-name">as measured</span></h4>
+                <div id="twin-timeline" class="small"></div>
+
+                <div class="callout" style="margin:1rem 0 0;">
+                    <strong>What if:</strong>
+                    <label class="small" style="display:block;margin-top:.5rem;"><input type="checkbox" id="tw-patch"> Patch critical &amp; high findings</label>
+                    <label class="small" style="display:block;"><input type="checkbox" id="tw-waf"> WAF / edge controls</label>
+                    <label class="small" style="display:block;"><input type="checkbox" id="tw-mon"> 24/7 monitoring &amp; response</label>
+                    <label class="small" style="display:block;margin-top:.5rem;">Annual revenue at risk: $<input type="number" id="tw-revenue" value="10000000" min="100000" step="100000" style="width:9rem;"> <span class="muted">(assumption &mdash; put your real number in)</span></label>
+                    <button class="btn btn-secondary" style="margin-top:.6rem;" onclick="applyWhatIf()">Re-run the trajectory</button>
+                </div>
+
+                <p id="twin-summary" class="small" style="text-align:left;margin-top:1rem;"></p>
+                <p class="small muted" style="margin-bottom:0;">Access vector: <strong id="twin-vector">--</strong></p>
+                <details style="margin-top:.75rem;">
+                    <summary class="small muted" style="cursor:pointer;">Every assumption behind these numbers</summary>
+                    <ul id="twin-assumptions" class="small muted" style="padding-left:1.1rem;line-height:1.8;"></ul>
+                </details>
+            </div>
+            <p id="twin-status" class="small muted" style="margin-bottom:0;"></p>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= WHY SENTINEL ======================= -->
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Why teams choose Sentinel</span>
+            <h2>Built to be defensible, not just impressive</h2>
+        </div>
+        <div class="grid grid-2">
+            <div class="card reveal">
+                <h3>Evidence over adjectives</h3>
+                <p>Every report cites what was observed, where, and why it matters to your business. If we did not see it, we do not claim it. That standard is enforced by a Critic pass in our own pipeline.</p>
+            </div>
+            <div class="card reveal">
+                <h3>The outside view, continuously</h3>
+                <p>Internal tools inventory what you know about. Sentinel enumerates what strangers can reach &mdash; forgotten subdomains, stale certificates, exposed staging, and new DNS records appearing daily.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Remediation, not just diagnosis</h3>
+                <p>Findings ship with copy-paste configuration fixes, ordered by business impact. Your team spends its time applying, not interpreting.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Responsible by design</h3>
+                <p>Public data only. No exploitation, no intrusive testing, no login attempts. Reports are safe to share with customers, auditors and your board.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= MISCHIEF / CHAOS ======================= -->
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Mischief &middot; Chaos as a Service</span>
+            <h2>Monitoring tells you what is exposed. Proof tells you what breaks.</h2>
+            <p class="lead muted">The offensive side of Zero-Trust Sentinel: autonomous adversarial runs inside a scope you authorize once, executed by a payroll of AI testing contractors and reported as evidence, not theatre.</p>
+        </div>
+        <div class="grid grid-4">
+            <div class="card reveal">
+                <h3>Continuous burn runs</h3>
+                <p class="small muted">Autonomous adversarial operations inside your authorized scope, with a running score of what your defenses actually catch.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Detection truth</h3>
+                <p class="small muted">What your alerts actually catch while the burn is happening &mdash; not what the dashboard claims on a quiet week.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Blast-radius reports</h3>
+                <p class="small muted">Every path that lands, documented: what it touched, what it would reach next, and the recovery order.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Chaos drills</h3>
+                <p class="small muted">Controlled chaos events that stress runbooks, alert fatigue, and decisions under pressure.</p>
+            </div>
+        </div>
+        <div class="btn-row" style="margin-top:2rem;">
+            <a class="btn btn-primary" href="chaos.html">Explore Chaos as a Service</a>
+            <a class="btn btn-secondary" href="crew.html">Meet the five contractors</a>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= THREAT CENTER TEASER ======================= -->
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Threat Center</span>
+            <h2>Know exactly what you are being asked about</h2>
+            <p class="lead muted">Short, sourced briefings on the current advisory window &mdash; written for the person who has to answer the board.</p>
+        </div>
+        <div class="grid grid-3">
+            <a class="card clickable reveal" href="threat-center/php2shell.html">
+                <span class="pill danger">Advisory</span>
+                <h3 style="margin-top:.8rem;">PHP2Shell: patch status under scrutiny</h3>
+                <p class="small muted">CVE-2026-109618 and CVE-2026-109619 &mdash; affected versions, fixed releases, and how to confirm coverage.</p>
+            </a>
+            <a class="card clickable reveal" href="threat-center/emudhra.html">
+                <span class="pill warn">Advisory</span>
+                <h3 style="margin-top:.8rem;">eMudhra CA: trusting the chain again</h3>
+                <p class="small muted">What was compromised, what CVE-2026-111943 actually fixes, and how to audit your certificate chains.</p>
+            </a>
+            <a class="card clickable reveal" href="threat-center/readiness.html">
+                <span class="pill">Checklist</span>
+                <h3 style="margin-top:.8rem;">The 30-minute readiness checklist</h3>
+                <p class="small muted">The exact questions to answer before your next status call &mdash; with the Sentinel check that proves each one.</p>
+            </a>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= PRICING TEASER ======================= -->
+<section class="section">
+    <div class="container center">
+        <div class="section-head center">
+            <span class="eyebrow">Pricing</span>
+            <h2>Less than one hour of a security consultant</h2>
+            <p class="lead muted">First scan free, all of it. Next score $1.99, full report $9.99. Continuous monitoring $49/month or $490/year &mdash; every score after your first free and full, plus the Digital Twin: 50 attack rounds simulated against your real findings, so you see the outage coming before it does. Offensive chaos runs are scoped engagements, priced from $2,500.</p>
+        </div>
+        <div class="btn-row">
+            <a class="btn btn-primary btn-lg" href="pricing.html">See full pricing</a>
+            <a class="btn btn-secondary btn-lg" href="#scan-section">Run a free assessment first</a>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= CTA BAND ======================= -->
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <span class="eyebrow">Take the measure today</span>
+            <h2>An unmeasured perimeter is a liability. Measure yours now.</h2>
+            <p class="lead muted">Two minutes to your first free score. A plan the same day. Continuous coverage from then on &mdash; never $1.99 again while you are subscribed. And when you want the story broken rather than measured, <a href="chaos.html">the crew takes over</a>.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="#scan-section">Get Your Free Risk Score</a>
+                <a class="btn btn-secondary btn-lg" href="contact.html">Talk to us</a>
+            </div>
+        </div>
+    </div>
+</section>
+
+</main>
+
+<!-- ======================= FOOTER ======================= -->
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="platform/index.html">Overview</a></li>
+                    <li><a href="platform/risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="platform/remediation.html">Remediation Plans</a></li>
+                    <li><a href="platform/reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="threat-center/index.html">Current Window</a></li>
+                    <li><a href="threat-center/php2shell.html">PHP2Shell</a></li>
+                    <li><a href="threat-center/emudhra.html">eMudhra CA</a></li>
+                    <li><a href="threat-center/readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="pricing.html">Pricing</a></li>
+                    <li><a href="chaos.html">Chaos as a Service</a></li>
+                    <li><a href="crew.html">The Crew</a></li>
+                    <li><a href="about.html">About</a></li>
+                    <li><a href="contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<!-- ======================= CHECKOUT MODAL ======================= -->
+<div id="checkout-modal" class="modal">
+    <div class="modal-content">
+        <button class="close-modal" onclick="closeModal()" aria-label="Close">&times;</button>
+        <h3>Activate Continuous Monitoring</h3>
+        <p id="modal-context">First 72 Hours Free, then $49/mo. Active the moment PayPal approves.</p>
+        <div id="paypal-button-container"></div>
+        <div id="paypal-error"></div>
+    </div>
+</div>
+
+<!-- ======================= SCORE UNLOCK MODAL ($1.99 / $9.99) ============ -->
+<div id="unlock-modal" class="modal">
+    <div class="modal-content">
+        <button class="close-modal" onclick="closeUnlock()" aria-label="Close">&times;</button>
+        <h3 id="unlock-title">Unlock your next score &mdash; $1.99</h3>
+        <p id="unlock-context">One payment, one unlock. No account, no subscription.</p>
+        <div id="paypal-order-container"></div>
+        <div id="unlock-error"></div>
+    </div>
+</div>
+
+<script src="assets/js/site.js"></script>
+<script>
+    // ===== CONFIG =========================================================
+    // Same-origin by default: the API serves this site, so no CORS or domain
+    // mismatch. Hosted elsewhere? Append ?api=https://your-api-domain.com
+    const API_BASE = new URLSearchParams(window.location.search).get('api')
+        || window.location.origin;
+    // Public identifiers, safe to ship in the page (PayPal JS SDK + $49/mo plan).
+    const PAYPAL_CLIENT_ID = 'BAA6kidDpEqUmq30fZmQu_Sur_SpK-zF1rNiibMkznTWWuP2OiGiIMQJ3sJE2yPO3RJ_TzNrSxGDqBfNZw';
+    const PAYPAL_PLAN_ID = 'P-8E455735W3884671YNLNRSVQ';
+    const GAUGE_CIRCUMFERENCE = 326.7; // 2 * PI * 52
+
+    let currentClientId = null;
+    let currentDomain = '';
+    let currentMode = 'free';   // what this run may show: free | full | report | score
+
+    // ===== Scan flow ======================================================
+    // Auto-open the scan card when arriving via the header CTA (#scan-section).
+    function openScan() {
+        document.getElementById('scan-section').style.display = 'block';
+    }
+    if (window.location.hash === '#scan-section') openScan();
+    document.querySelectorAll('a[href="#scan-section"]').forEach(function (a) {
+        a.addEventListener('click', openScan);
+    });
+    openScan(); // the dedicated section is the point of this page
+
+    function setStatus(text) {
+        document.getElementById('scan-status').innerText = text;
+    }
+
+    // The API's /capture is a POST with a JSON body (LeadCapture model),
+    // and returns {status, scan_id, client_id, referral_applied}.
+    // ===== Free-first score gate ==========================================
+    // First scan of every domain: free, full report, all of it. After that the
+    // free tier downgrades - repeats need a credit ($1.99 score / $9.99 full
+    // report) or active monitoring. Scores are always the real computed number;
+    // only access downgrades, never the truth.
+    const GATE_KEY = 'zts_score_gate_v1';
+    function loadGate() {
+        try {
+            const g = JSON.parse(localStorage.getItem(GATE_KEY) || '{}');
+            g.domains = g.domains || {};
+            g.credits = g.credits || 0;
+            g.report_credits = g.report_credits || 0;
+            return g;
+        } catch (e) {
+            return { domains: {}, credits: 0, report_credits: 0 };
+        }
+    }
+    function saveGate(g) { localStorage.setItem(GATE_KEY, JSON.stringify(g)); }
+    function gateVerdict(domain) {
+        const g = loadGate();
+        if (!g.domains[domain]) return 'free';      // first scan of this domain
+        if (g.monitoring) return 'full';            // subscribers never pay per score
+        if (g.report_credits > 0) return 'report';  // $9.99 full-report unlock
+        if (g.credits > 0) return 'score';          // $1.99 score unlock
+        return 'locked';                            // free tier downgraded
+    }
+    function showLockCard(domain) {
+        document.getElementById('scan-section').style.display = 'none';
+        const lock = document.getElementById('score-lock');
+        lock.style.display = 'block';
+        const known = loadGate().domains[domain] || {};
+        const hasScore = typeof known.score === 'number';
+        document.getElementById('lock-domain').innerText = domain;
+        document.getElementById('lock-score').style.display = hasScore ? 'block' : 'none';
+        document.getElementById('lock-actual').style.display = hasScore ? 'none' : 'block';
+        if (hasScore) {
+            document.getElementById('lock-score-num').innerText = known.score + '/100';
+            document.getElementById('lock-score-date').innerText =
+                'Your last free score - ' + (known.date || 'recently');
+        }
+        lock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    function backToScan() {
+        document.getElementById('score-lock').style.display = 'none';
+        document.getElementById('scan-section').style.display = 'block';
+    }
+
+    async function startScan() {
+        const domain = document.getElementById('domain-input').value.trim().toLowerCase()
+            .replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+        const email = document.getElementById('email-input').value.trim();
+        if (!domain) return alert('Please enter a domain.');
+
+        // Free-first gate: second look at the same domain is behind the paywall.
+        const verdict = gateVerdict(domain);
+        if (verdict === 'locked') { showLockCard(domain); return; }
+        if (!email) return alert('Please enter your work email - it is where the report goes.');
+
+        // Spend the matching unlock (if any) for this run.
+        const gateState = loadGate();
+        if (verdict === 'score') { gateState.credits -= 1; saveGate(gateState); }
+        if (verdict === 'report') { gateState.report_credits -= 1; saveGate(gateState); }
+        currentMode = verdict;
+
+        document.getElementById('score-lock').style.display = 'none';
+        document.getElementById('scan-section').style.display = 'block';
+
+        const btn = document.getElementById('scan-btn');
+        btn.disabled = true;
+        setStatus('Analyzing external attack surface... (about 2 minutes - your first score is free)');
+
+        try {
+            const res = await fetch(`${API_BASE}/capture`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain, email, name: 'Visitor' })
+            });
+            const ctype = (res.headers.get('content-type') || '').toLowerCase();
+            // Static hosting (InfinityFree) serves HTML here, not JSON: the
+            // assessment engine is not connected yet. Say so instead of
+            // failing cryptically.
+            if (!res.ok || ctype.indexOf('json') === -1) {
+                setStatus('The assessment engine is not connected to this site yet. '
+                    + 'Deploy the API and set API_BASE in the CONFIG block to its URL to activate live scans.');
+                btn.disabled = false;
+                return;
+            }
+            const data = await res.json();
+            if (data.status === 'started') {
+                currentClientId = data.client_id;
+                currentDomain = domain;
+                pollScan(data.scan_id);
+            } else if (data.status === 'suppressed') {
+                setStatus('This address has opted out of contact from us.');
+                btn.disabled = false;
+            } else {
+                setStatus(data.message || 'Assessment request rejected. Try another domain.');
+                btn.disabled = false;
+            }
+        } catch (e) {
+            setStatus('The assessment engine is not connected to this site yet. '
+                + 'Deploy the API and set API_BASE in the CONFIG block to its URL to activate live scans.');
+            btn.disabled = false;
+        }
+    }
+
+    // Terminal states: 'completed', and 'hot' (risk < 80 - report ready,
+    // lead added to the priority queue).
+    function pollScan(taskId) {
+        const interval = setInterval(async () => {
+            try {
+                const res = await fetch(`${API_BASE}/task/${taskId}`);
+                const ctype = (res.headers.get('content-type') || '').toLowerCase();
+                if (!res.ok || ctype.indexOf('json') === -1) {
+                    // Engine went away (e.g. static hosting) - stop polling.
+                    clearInterval(interval);
+                    setStatus('The assessment engine is not connected to this site yet. '
+                        + 'Deploy the API and set API_BASE in the CONFIG block to its URL to activate live scans.');
+                    document.getElementById('scan-btn').disabled = false;
+                    return;
+                }
+                const data = await res.json();
+                if (data.status === 'completed' || data.status === 'hot') {
+                    clearInterval(interval);
+                    // /task only reports progress; score + findings come from
+                    // the public report endpoint.
+                    const repRes = await fetch(`${API_BASE}/report/${encodeURIComponent(currentDomain)}`);
+                    const report = await repRes.json();
+                    if (report.status === 'completed') showReport(report);
+                    else setStatus('Report is still being written. Refresh in a few seconds.');
+                } else if (data.status === 'failed') {
+                    clearInterval(interval);
+                    setStatus('Assessment failed. Please try another domain.');
+                    document.getElementById('scan-btn').disabled = false;
+                }
+            } catch (e) { /* transient network error - keep polling */ }
+        }, 3000);
+    }
+
+    function showReport(report) {
+        document.getElementById('scan-section').style.display = 'none';
+        document.getElementById('score-lock').style.display = 'none';
+        const reportSection = document.getElementById('report-section');
+        reportSection.style.display = 'block';
+        reportSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        // Gauge: score < 80 = elevated risk (red), >= 80 = healthy (green)
+        const score = report.risk_score;
+        const healthy = score >= 80;
+        const offset = GAUGE_CIRCUMFERENCE * (1 - Math.max(0, Math.min(100, score)) / 100);
+        const arc = document.getElementById('gauge-arc');
+        arc.setAttribute('stroke', healthy ? '#15803d' : '#b91c1c');
+        arc.setAttribute('stroke-dashoffset', offset.toFixed(1));
+        document.getElementById('score-display').textContent = score;
+
+        const verdict = document.getElementById('verdict');
+        verdict.className = 'verdict ' + (healthy ? 'safe' : 'critical');
+        verdict.innerText = healthy
+            ? 'Healthy posture - minor exposures below.'
+            : 'Elevated risk - material exposures identified below.';
+
+        // Black October readiness badge (loss-aversion trigger):
+        // score < 80 -> pulsing red threat level; >= 80 -> covered.
+        const badge = document.getElementById('threat-badge');
+        const badgeText = document.getElementById('threat-badge-text');
+        const badgeNote = document.getElementById('badge-note');
+        badge.style.display = 'flex';
+        badge.className = 'threat-badge ' + (healthy ? 'covered' : 'high');
+        badgeText.innerText = healthy
+            ? 'Black October posture: covered'
+            : 'Black October readiness: low';
+        badgeNote.style.display = 'block';
+        badgeNote.innerText = healthy
+            ? 'Your public perimeter passed this assessment during the October 2026 advisory window (PHP2Shell, eMudhra CA). Continuous monitoring keeps it that way.'
+            : 'Your perimeter shows material exposures during the October 2026 advisory window (PHP2Shell CVE-2026-109618/619, eMudhra CA). Confirm your patch posture below.';
+
+        // Remember this domain's real score - the lock card shows it on the
+        // next free attempt (a real number, never inflated).
+        const gateState = loadGate();
+        gateState.domains[currentDomain] = {
+            score: score,
+            date: new Date().toISOString().slice(0, 10)
+        };
+        saveGate(gateState);
+
+        const details = document.getElementById('risk-details');
+        const risks = report.top_risks || [];
+        if (currentMode === 'score') {
+            // $1.99 score run: the number is yours, the plan is not.
+            details.innerHTML = `<div class="callout warn" style="margin:.5rem 0 0;">
+                <strong>Findings locked - this was the $1.99 score.</strong>
+                You bought the number, not the fix list. Unlock the full report with copy-paste remediation for $9.99, or subscribe so every future score comes back free and full.
+                <div class="btn-row" style="margin-top:.85rem;">
+                    <button class="btn btn-primary" onclick="openUnlock('report')">Unlock full report - $9.99</button>
+                    <button class="btn btn-secondary" onclick="openCheckout()">Monitoring - $49/mo</button>
+                </div></div>`;
+        } else if (risks.length > 0) {
+            details.innerHTML = `<h4 style="text-align:left;font-size:1rem;">Top Findings</h4><ul class="risk-list">${risks.map(r => {
+                const sev = (r.severity || 'info').toLowerCase();
+                return `<li><span class="sev sev-${sev}">${sev}</span><strong>${r.title}</strong> &mdash; ${r.business_impact || ''}</li>`;
+            }).join('')}</ul>`;
+        } else {
+            details.innerHTML = '';
+        }
+        document.getElementById('modal-context').innerText =
+            `First 72 Hours Free for ${currentDomain}. Current posture: ${score}/100.`;
+
+        renderTwin();
+    }
+
+    // ===== Digital Twin (subscriber-only trajectory simulation) ===========
+    // The locked view never shows fabricated numbers - the metrics stay as
+    // placeholders until a real simulation comes back from the API.
+    let TWIN = null;              // last trajectory payload from /simulate
+    let TWIN_REVENUE = 10000000;  // disclosed revenue assumption
+
+    function renderTwin() {
+        const twin = document.getElementById('digital-twin');
+        twin.style.display = 'block';
+        const locked = document.getElementById('twin-locked');
+        const body = document.getElementById('twin-body');
+        const status = document.getElementById('twin-status');
+        const g = loadGate();
+
+        if (!g.monitoring || !currentClientId) {
+            locked.style.display = 'block';
+            body.style.display = 'none';
+            status.innerText = '';
+            return;
+        }
+
+        locked.style.display = 'none';
+        body.style.display = 'block';
+        status.innerText = 'Running 50 attack rounds against your measured exposure...';
+
+        fetch(`${API_BASE}/simulate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: currentClientId, annual_revenue: TWIN_REVENUE })
+        }).then(async res => {
+            const ctype = (res.headers.get('content-type') || '').toLowerCase();
+            if (ctype.indexOf('json') === -1) {
+                status.innerText = 'The simulation engine is not connected to this site yet. '
+                    + 'Deploy the API and set API_BASE in the CONFIG block to its URL to activate Digital Twin trajectories.';
+                return null;
+            }
+            const data = await res.json();
+            if (res.status === 403) {
+                locked.style.display = 'block';
+                body.style.display = 'none';
+                status.innerText = data.error || 'Digital Twin requires active monitoring.';
+                return null;
+            }
+            if (res.status === 404) {
+                status.innerText = data.error || 'No scan data yet - run the free scan first.';
+                return null;
+            }
+            return data;
+        }).then(data => {
+            if (!data || data.status !== 'completed') return;
+            TWIN = data;
+            status.innerText = '';
+            showTwin('baseline');
+        }).catch(() => {
+            status.innerText = 'The simulation engine is not connected to this site yet. '
+                + 'Deploy the API and set API_BASE in the CONFIG block to its URL to activate Digital Twin trajectories.';
+        });
+    }
+
+    function fmtHours(h) {
+        if (h == null) return '--';
+        return h < 1 ? Math.round(h * 60) + ' min' : h.toFixed(1) + ' h';
+    }
+    function fmtMoney(n) {
+        if (n == null) return '--';
+        return n >= 1000000 ? '$' + (n / 1000000).toFixed(1) + 'M'
+            : n >= 1000 ? '$' + Math.round(n / 1000) + 'k' : '$' + Math.round(n);
+    }
+
+    function showTwin(key) {
+        if (!TWIN) return;
+        const s = (TWIN.scenarios || {})[key] || TWIN.scenarios.baseline;
+        const label = key === 'baseline' ? 'as measured'
+            : key === 'full_stack' ? 'full mitigation stack'
+            : ((TWIN.mitigations || []).find(m => m.key === key) || {}).label || key;
+        document.getElementById('twin-scenario-name').innerText = label;
+        document.getElementById('twin-detect').innerText = fmtHours(s.time_to_detect_hours_p50);
+        document.getElementById('twin-contain').innerText = fmtHours(s.time_to_contain_hours_p50);
+        document.getElementById('twin-rep').innerText = (s.reputation_drop || 0) + ' pts';
+        // Loss scales linearly with the revenue assumption, so the CTO's own
+        // number is applied here without re-running the rounds.
+        const hourly = TWIN_REVENUE / 8760;
+        document.getElementById('twin-loss').innerText = fmtMoney(s.impact_hours_p50 * hourly);
+
+        // Timeline: events proportional to hours from initial access.
+        const tl = s.timeline || [];
+        const max = Math.max(1, ...tl.map(e => e.t));
+        document.getElementById('twin-timeline').innerHTML = tl.map(e =>
+            `<div style="display:flex;gap:.75rem;align-items:baseline;margin:.45rem 0;">
+                <span style="min-width:5.5rem;text-align:right;font-weight:600;">${fmtHours(e.t)}</span>
+                <span style="flex:1;border-left:2px solid ${e.t === 0 ? 'var(--danger)' : 'var(--line)'};padding-left:.7rem;">
+                    <strong>${e.event}</strong> &mdash; ${e.note}
+                    <span style="display:block;height:3px;background:var(--brand);opacity:.35;width:${Math.max(4, (e.t / max) * 100)}%;margin-top:.2rem;"></span>
+                </span>
+            </div>`).join('');
+
+        document.getElementById('twin-summary').innerText = TWIN.executive_summary || '';
+        const v = TWIN.access_vector;
+        document.getElementById('twin-vector').innerText = v && v.title
+            ? `${v.title} (${(v.severity || '').toLowerCase()})` : 'highest-severity finding';
+        document.getElementById('twin-assumptions').innerHTML =
+            (TWIN.assumptions || []).map(a => `<li>${a}</li>`).join('');
+    }
+
+    function applyWhatIf() {
+        if (!TWIN) return;
+        TWIN_REVENUE = Math.max(100000, parseInt(document.getElementById('tw-revenue').value, 10) || 10000000);
+        const picks = [
+            document.getElementById('tw-patch').checked,
+            document.getElementById('tw-waf').checked,
+            document.getElementById('tw-mon').checked
+        ].filter(Boolean).length;
+        const key = picks >= 2 ? 'full_stack'
+            : document.getElementById('tw-patch').checked ? 'patch_critical_high'
+            : document.getElementById('tw-waf').checked ? 'edge_waf'
+            : document.getElementById('tw-mon').checked ? 'monitoring_247'
+            : 'baseline';
+        showTwin(key);
+    }
+
+    // ===== Native PayPal Subscribe Button ================================
+    function openCheckout() {
+        document.getElementById('checkout-modal').style.display = 'flex';
+        loadPayPalButton();
+    }
+
+    function closeModal() {
+        document.getElementById('checkout-modal').style.display = 'none';
+        // Fresh container on next open - avoids duplicate button renders
+        document.getElementById('paypal-button-container').innerHTML = '';
+        document.getElementById('paypal-error').innerText = '';
+    }
+
+    function renderPayPalButton() {
+        paypal.Buttons({
+            style: { shape: 'rect', color: 'gold', layout: 'vertical', label: 'paypal' },
+            createSubscription: (data, actions) =>
+                actions.subscription.create({ plan_id: PAYPAL_PLAN_ID }),
+            onApprove: async (data) => {
+                // Browser is untrusted: the API re-verifies this subscription
+                // with PayPal server-to-server before activating.
+                const res = await fetch(`${API_BASE}/webhook/paypal-activate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        subscription_id: data.subscriptionID,
+                        client_id: currentClientId
+                    })
+                });
+                if (res.ok) {
+                    const out = await res.json().catch(() => ({}));
+                    // Monitoring subscribers never pay per score again.
+                    const gateState = loadGate();
+                    gateState.monitoring = true;
+                    saveGate(gateState);
+                    alert(out.message || 'Monitoring is active.');
+                    window.location.href = `${API_BASE}/dashboard/${currentClientId}`;
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    document.getElementById('paypal-error').innerText =
+                        'Payment received, but activation needs review: ' +
+                        (err.error || `HTTP ${res.status}`).toString() +
+                        ' - contact support with your PayPal subscription id.';
+                }
+            },
+            onError: (err) => {
+                console.error('PayPal button error', err);
+                document.getElementById('paypal-error').innerText =
+                    'PayPal could not load. Email us and we will send a direct subscription link.';
+            }
+        }).render('#paypal-button-container');
+    }
+
+    function loadPayPalButton() {
+        const container = document.getElementById('paypal-button-container');
+        container.innerHTML = '';
+        if (window.paypal && window.paypal.Buttons) {
+            renderPayPalButton();          // SDK already loaded (2nd open)
+            return;
+        }
+        if (window.__paypalLoading) return;
+        window.__paypalLoading = true;
+        const script = document.createElement('script');
+        script.src = `https://www.paypal.com/sdk/js?client-id=${PAYPAL_CLIENT_ID}&vault=true&intent=subscription&currency=USD`;
+        script.onload = () => renderPayPalButton();
+        script.onerror = () => {
+            document.getElementById('paypal-error').innerText =
+                'Could not load PayPal. Check your connection and try again.';
+        };
+        document.body.appendChild(script);
+    }
+
+    // ===== One-time score unlocks ($1.99 score / $9.99 full report) ========
+    let unlockKind = 'score';
+    function openUnlock(kind) {
+        unlockKind = kind;
+        document.getElementById('unlock-modal').style.display = 'flex';
+        document.getElementById('unlock-title').innerText = kind === 'score'
+            ? 'Unlock your next score - $1.99'
+            : 'Unlock the full report - $9.99';
+        document.getElementById('unlock-context').innerText = kind === 'score'
+            ? 'One payment, one full score in about 120 seconds. No account, no subscription - your first scan was free; this is the next one.'
+            : 'One payment, the whole report: every finding, copy-paste fixes, business impact - yours to keep.';
+        loadPayPalOrderButton();
+    }
+    function closeUnlock() {
+        document.getElementById('unlock-modal').style.display = 'none';
+        document.getElementById('paypal-order-container').innerHTML = '';
+        document.getElementById('unlock-error').innerText = '';
+    }
+    function renderPayPalOrderButton() {
+        paypal.Buttons({
+            style: { shape: 'rect', color: 'gold', layout: 'vertical', label: 'paypal' },
+            createOrder: (data, actions) => actions.order.create({
+                intent: 'capture',
+                purchase_units: [{
+                    description: unlockKind === 'score'
+                        ? 'Zero-Trust Sentinel - next risk score'
+                        : 'Zero-Trust Sentinel - full risk report',
+                    amount: { currency_code: 'USD', value: unlockKind === 'score' ? '1.99' : '9.99' }
+                }]
+            }),
+            onApprove: async (data, actions) => {
+                await actions.order.capture();
+                // Browser is untrusted: when the API is connected it will
+                // re-verify this order server-to-server, exactly like the
+                // subscription activation webhook above.
+                const gateState = loadGate();
+                if (unlockKind === 'score') gateState.credits += 1;
+                else gateState.report_credits += 1;
+                saveGate(gateState);
+                closeUnlock();
+                setStatus('Payment received. Your unlock is live - running your score now.');
+                startScan();
+            },
+            onError: (err) => {
+                console.error('PayPal order error', err);
+                document.getElementById('unlock-error').innerText =
+                    'PayPal could not start the payment. Try again, or email hello@zerodaysentinel.xo.je.';
+            }
+        }).render('#paypal-order-container');
+    }
+    function loadPayPalOrderButton() {
+        const container = document.getElementById('paypal-order-container');
+        container.innerHTML = '';
+        if (window.paypal && window.paypal.Buttons) { renderPayPalOrderButton(); return; }
+        if (window.__paypalLoading) {
+            // The subscription SDK is already loading - same script serves both.
+            let tries = 0;
+            const poll = setInterval(function () {
+                if (window.paypal && window.paypal.Buttons) { clearInterval(poll); renderPayPalOrderButton(); }
+                else if (++tries > 80) {
+                    clearInterval(poll);
+                    document.getElementById('unlock-error').innerText =
+                        'Could not load PayPal. Check your connection and try again.';
+                }
+            }, 250);
+            return;
+        }
+        window.__paypalLoading = true;
+        const script = document.createElement('script');
+        script.src = `https://www.paypal.com/sdk/js?client-id=${PAYPAL_CLIENT_ID}&vault=true&intent=subscription&currency=USD`;
+        script.onload = () => renderPayPalOrderButton();
+        script.onerror = () => {
+            document.getElementById('unlock-error').innerText =
+                'Could not load PayPal. Check your connection and try again.';
+        };
+        document.body.appendChild(script);
+    }
+</script>
+</body>
+</html>

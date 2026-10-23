@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eMudhra CA Key Compromise (CVE-2026-111943) | Zero-Trust Sentinel Threat Center</title>
+    <meta name="description" content="The eMudhra certificate authority key compromise: what was affected, what Go's CVE-2026-111943 fixes, and how to audit your certificate chains.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="../platform/index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="../platform/risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="../platform/remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="../platform/reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="../chaos.html">Chaos</a>
+            <a href="../crew.html">Crew</a>
+            <a href="../pricing.html">Pricing</a>
+            <a href="../about.html">Company</a>
+            <a href="../contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="../index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="../index.html">Home</a><span class="sep">/</span><a href="index.html">Threat Center</a><span class="sep">/</span><span>eMudhra CA</span>
+</div>
+
+<section class="hero">
+    <div class="container prose">
+        <span class="pill warn">Advisory &middot; detailed 21 October 2026</span>
+        <h1 style="margin-top:1rem;">The eMudhra certificate authority compromise</h1>
+        <p class="lead">Private keys for eight eMudhra intermediate CA certificates &mdash; six for TLS, two for code signing &mdash; were found to be recoverable due to weak key generation. eMudhra revoked the certificates and stopped issuing under the affected G3 root.</p>
+        <div class="btn-row">
+            <a class="btn btn-primary" href="../index.html#scan-section">Audit my certificate chains</a>
+            <a class="btn btn-ghost" href="readiness.html">Readiness checklist</a>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">The facts</span><h2>What is known, as published</h2></div>
+        <div class="table-wrap reveal">
+            <table class="corporate">
+                <tbody>
+                    <tr><td><strong>What happened</strong></td><td>A certificate authority key compromise &mdash; not a software vulnerability in eMudhra products. Weak key generation made the private keys recoverable.</td></tr>
+                    <tr><td><strong>Affected material</strong></td><td>Eight intermediate CA certificates: six TLS, two code signing. Certificates were revoked; issuance under the affected G3 root stopped.</td></tr>
+                    <tr><td><strong>CVE-2026-111943</strong></td><td>The Go ecosystem mitigation: <code>crypto/x509</code> adds a denylist so <code>Certificate.Verify</code> rejects chains involving the affected intermediates. Go lists affected versions as before 1.26.10 and 1.27.0 prereleases before 1.27.3.</td></tr>
+                    <tr><td><strong>Exploitation status</strong></td><td>Cisco Talos reported no malicious incidents involving the certificates in the wild as of 21 October, 14:00 UTC.</td></tr>
+                    <tr><td><strong>Conditions for harm</strong></td><td>A vulnerable verifier must trust an affected certificate, and an attacker must be in a position to present a forged certificate while intercepting or redirecting the connection. Red Hat states the key compromise does not by itself mean systems were compromised.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout warn">
+            <strong>Do not conflate this with PHP2Shell.</strong> Different mechanism, different remediation, different exploitation picture. In your briefing, keep them as two rows &mdash; one patching item, one certificate-hygiene item &mdash; and resist any narrative that merges them into a single apocalyptic event.
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">Your exposure</span><h2>Auditing your chains is mostly plumbing</h2></div>
+        <div class="grid grid-3">
+            <div class="step reveal">
+                <h3>List your issuers</h3>
+                <p>Every public host, every certificate, who issued it and when. Most teams discover a wildcard from 2021 they had forgotten about.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Check against revocations</h3>
+                <p>Cross-reference issuers and intermediates against the revoked set, and confirm your trust stores and Go binaries are on the fixed versions.</p>
+            </div>
+            <div class="step reveal">
+                <h3>Re-issue where needed</h3>
+                <p>Replace certificates chaining through affected intermediates, then re-scan to prove every host now presents a clean chain.</p>
+            </div>
+        </div>
+
+        <div class="callout good" style="max-width:860px;">
+            <strong>What Sentinel checks for you:</strong> TLS and certificate chains are analyzed on every live host in your assessment &mdash; validity, issuer, and chain integrity &mdash; so an affected intermediate shows up as a named finding against the host that serves it, not as a vague "consider your certificates."
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container prose">
+        <span class="eyebrow">Sources</span>
+        <h2>Where this came from</h2>
+        <ul class="small muted">
+            <li>Cisco Talos: compromised intermediate certificates (21 October 2026)</li>
+            <li>Red Hat security bulletin RHSB-2026-012 and CVE-2026-111943 record</li>
+            <li>Go vulnerability report GO-2026-6809 (pkg.go.dev)</li>
+            <li>Cloudflare's eMudhra certificate compromise response</li>
+        </ul>
+        <p class="small muted">Note the spelling: <strong>eMudhra</strong>. It is frequently written incorrectly in secondary coverage, which is a useful tell for whether a source actually read the advisory.</p>
+    </div>
+</section>
+
+<section class="cta-band">
+    <div class="container">
+        <div class="inner">
+            <h2>Know your chains before someone else does</h2>
+            <p class="lead muted">Free assessment, public data only, about two minutes.</p>
+            <div class="btn-row">
+                <a class="btn btn-primary btn-lg" href="../index.html#scan-section">Get Your Free Risk Score</a>
+            </div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="../platform/index.html">Overview</a></li>
+                    <li><a href="../platform/risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="../platform/remediation.html">Remediation Plans</a></li>
+                    <li><a href="../platform/reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="index.html">Current Window</a></li>
+                    <li><a href="php2shell.html">PHP2Shell</a></li>
+                    <li><a href="emudhra.html">eMudhra CA</a></li>
+                    <li><a href="readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="../pricing.html">Pricing</a></li>
+                    <li><a href="../chaos.html">Chaos as a Service</a></li>
+                    <li><a href="../crew.html">The Crew</a></li>
+                    <li><a href="../about.html">About</a></li>
+                    <li><a href="../contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

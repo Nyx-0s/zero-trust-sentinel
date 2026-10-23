@@ -1,0 +1,11 @@
+domain,industry,estimated_risk_score
+stripe.com,B2B SaaS / Payments,52
+notion.so,Productivity SaaS,61
+figma.com,Design SaaS,47
+airtable.com,No-code SaaS,66
+linear.app,Developer Tools,44
+vercel.com,Developer Infrastructure,58
+netlify.com,Developer Infrastructure,71
+github.com,Developer Tools,49
+slack.com,Collaboration SaaS,63
+zoom.us,Communications SaaS,76

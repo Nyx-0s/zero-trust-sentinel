@@ -1,0 +1,19 @@
+# Never ship secrets or local state into the image build context.
+.env
+.env.*
+!.env.example
+*.log
+supervisor.log
+deploy.log
+harvey.log
+outbound.log
+win_back.log
+reports/
+.harvey/
+.git/
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+venv/
+.envrc

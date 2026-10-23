@@ -1,0 +1,19 @@
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+*.dev.vars
+
+# Runtime / logs
+*.log
+reports/
+harvey.local.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Harvey clone + local state
+.harvey/

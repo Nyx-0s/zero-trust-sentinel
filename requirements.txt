@@ -1,0 +1,33 @@
+# FastAPI web framework
+fastapi>=0.109.0
+
+# Uvicorn ASGI server
+uvicorn[standard]>=0.27.0
+
+# LangGraph for orchestration
+langgraph>=0.0.20
+
+# LangChain for LLM integration
+langchain>=0.2.0
+
+# LangChain OpenAI provider for Groq
+langchain-openai>=0.0.2
+
+# asyncpg for PostgreSQL
+asyncpg>=0.29.0
+
+# aiohttp for async HTTP requests
+aiohttp>=3.9.0
+
+# Pydantic for data validation
+pydantic>=2.7.0
+
+# HTTP client for Resend API and outbound engine
+httpx>=0.27.0
+
+# Stripe for subscriptions, tripwire checkout, and win-back coupons
+stripe>=8.0.0
+
+# CSV support (built-in, but listed for clarity)
+
+# Security tools would be installed system-wide via Go in Docker

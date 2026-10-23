@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Risk Scoring | Zero-Trust Sentinel</title>
+    <meta name="description" content="How the Sentinel 0-100 risk score is computed, what moves it, and why under 80 means elevated exposure.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <details class="nav-drop">
+                <summary>Platform</summary>
+                <div class="menu">
+                    <a href="index.html"><strong>Platform Overview</strong><span>How Sentinel works end to end</span></a>
+                    <a href="risk-scoring.html"><strong>Risk Scoring</strong><span>Free 2-minute risk score</span></a>
+                    <a href="remediation.html"><strong>Remediation Plans</strong><span>Copy-paste fixes, prioritized</span></a>
+                    <a href="reporting.html"><strong>Board Reporting</strong><span>White-label PDF assessments</span></a>
+                </div>
+            </details>
+            <details class="nav-drop">
+                <summary>Threat Center</summary>
+                <div class="menu">
+                    <a href="../threat-center/index.html"><strong>Threat Center</strong><span>Current advisory window</span></a>
+                    <a href="../threat-center/php2shell.html"><strong>PHP2Shell</strong><span>CVE-2026-109618 / 109619</span></a>
+                    <a href="../threat-center/emudhra.html"><strong>eMudhra CA</strong><span>CVE-2026-111943</span></a>
+                    <a href="../threat-center/readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
+                </div>
+            </details>
+            <a href="../chaos.html">Chaos</a>
+            <a href="../crew.html">Crew</a>
+            <a href="../pricing.html">Pricing</a>
+            <a href="../about.html">Company</a>
+            <a href="../contact.html">Contact</a>
+            <a class="btn btn-primary header-cta" href="../index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<div class="container breadcrumb">
+    <a href="../index.html">Home</a><span class="sep">/</span><a href="index.html">Platform</a><span class="sep">/</span><span>Risk Scoring</span>
+</div>
+
+<section class="hero">
+    <div class="container prose">
+        <span class="eyebrow">Risk Scoring</span>
+        <h1>A single number you can defend</h1>
+        <p class="lead">The Sentinel score runs 0&ndash;100. Higher is stronger. It is computed from what is publicly reachable right now &mdash; not from self-reported questionnaires or last year's penetration test.</p>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">The bands</span>
+            <h2>What your score means</h2>
+        </div>
+        <div class="table-wrap reveal">
+            <table class="corporate">
+                <thead>
+                    <tr><th>Band</th><th>Reading</th><th>What it triggers</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>80&ndash;100</strong></td>
+                        <td><span class="pill ok">Healthy posture</span> &mdash; no material exposures found on the public surface.</td>
+                        <td>Minor findings listed; continuous monitoring recommended to hold the line.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>60&ndash;79</strong></td>
+                        <td><span class="pill warn">Elevated</span> &mdash; exposures that an attacker could chain.</td>
+                        <td>Remediation plan issued; re-scan scheduled; leadership informed.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>0&ndash;59</strong></td>
+                        <td><span class="pill danger">Material exposure</span> &mdash; findings with a direct path to breach.</td>
+                        <td>Immediate fix list; executive summary generated; board-ready PDF.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="callout">
+            <strong>80 is the line.</strong> Below it, your perimeter shows material exposures during an active advisory window &mdash; which is exactly why the assessment displays a readiness warning alongside the score.
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Inputs</span>
+            <h2>What moves the number</h2>
+        </div>
+        <div class="grid grid-2">
+            <div class="card reveal">
+                <h3>Reachability</h3>
+                <p>How much of your infrastructure answers from the public internet &mdash; subdomains, exposed services, forgotten environments.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Vulnerability posture</h3>
+                <p>Known weaknesses detected on live hosts, weighted by exploitability and whether they are internet-facing.</p>
+            </div>
+            <div class="card reveal">
+                <h3>TLS &amp; certificate health</h3>
+                <p>Expiry, weak parameters, and issuer chains &mdash; including chains that touch a certificate authority under active compromise.</p>
+            </div>
+            <div class="card reveal">
+                <h3>Configuration hygiene</h3>
+                <p>Header discipline, information leakage, admin surfaces left in public view, and DNS correctness.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container prose">
+        <span class="eyebrow">Methodology</span>
+        <h2>Why we publish the bands</h2>
+        <p>A score that cannot be explained is a marketing prop. Every band above is fixed, visible on every report, and applied identically to every customer. The findings behind your number are always one click away, each with the observation that produced it.</p>
+        <p>That is also why our pipeline ends with a Critic pass: a claim that cannot be traced to something we observed on your public surface is removed before you ever see it.</p>
+        <div class="btn-row">
+            <a class="btn btn-primary" href="../index.html#scan-section">Score your domain</a>
+            <a class="btn btn-ghost" href="remediation.html">See how fixes are prioritized</a>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div>
+                <a class="wordmark" href="../index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+                <p class="muted small" style="margin-top:.8rem;max-width:300px;">Continuous external attack surface monitoring for companies that cannot afford to be the next headline.</p>
+                <p class="muted small">All assessments are generated from public data. No exploitation, no intrusive testing.</p>
+                <p class="muted small">Mischief chaos runs: scoped, authorized, evidence-logged.</p>
+            </div>
+            <div>
+                <h4>Platform</h4>
+                <ul>
+                    <li><a href="index.html">Overview</a></li>
+                    <li><a href="risk-scoring.html">Risk Scoring</a></li>
+                    <li><a href="remediation.html">Remediation Plans</a></li>
+                    <li><a href="reporting.html">Board Reporting</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Threat Center</h4>
+                <ul>
+                    <li><a href="../threat-center/index.html">Current Window</a></li>
+                    <li><a href="../threat-center/php2shell.html">PHP2Shell</a></li>
+                    <li><a href="../threat-center/emudhra.html">eMudhra CA</a></li>
+                    <li><a href="../threat-center/readiness.html">Readiness Checklist</a></li>
+                </ul>
+            </div>
+            <div>
+                <h4>Company</h4>
+                <ul>
+                    <li><a href="../pricing.html">Pricing</a></li>
+                    <li><a href="../chaos.html">Chaos as a Service</a></li>
+                    <li><a href="../crew.html">The Crew</a></li>
+                    <li><a href="../about.html">About</a></li>
+                    <li><a href="../contact.html">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="../assets/js/site.js"></script>
+</body>
+</html>

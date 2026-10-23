@@ -1,0 +1,37 @@
+# Zero-Trust Sentinel - One-Click deployment (Oracle Cloud Free Tier + Neon Postgres)
+#
+# Uses an external Neon Postgres (DATABASE_URL) - no local database service.
+# All variables below are read from the .env file in this directory.
+services:
+  sentinel:
+    build: .
+    container_name: zero-trust-sentinel
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - PRICE_ID_MONTHLY=${PRICE_ID_MONTHLY:-}
+      - FROM_EMAIL=${FROM_EMAIL}
+      - MAX_EMAILS_PER_DAY=${MAX_EMAILS_PER_DAY:-20}
+      # Outbound pacing (Black October window: 30-60s jitter, cap 40/day)
+      - JITTER_MIN_SECONDS=${JITTER_MIN_SECONDS:-60}
+      - JITTER_MAX_SECONDS=${JITTER_MAX_SECONDS:-120}
+      # Payments (India-based merchant): PayPal Native Button + Subscriptions API
+      # PAYPAL_MODE=sandbox -> api-m.sandbox.paypal.com, live -> api-m.paypal.com
+      - PAYPAL_MODE=${PAYPAL_MODE:-live}
+      - PAYPAL_API_BASE=${PAYPAL_API_BASE:-}
+      - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID:-}
+      - PAYPAL_SECRET=${PAYPAL_SECRET:-}
+      - PAYPAL_PLAN_ID=${PAYPAL_PLAN_ID:-}
+      - PAYPAL_WEBHOOK_ID=${PAYPAL_WEBHOOK_ID:-}
+      - AIRTM_PAYMENT_LINK=${AIRTM_PAYMENT_LINK:-}
+      # Public URL of the API (success/cancel URLs) + cockpit CORS allow-list
+      - SITE_URL=${SITE_URL:-}
+      - FRONTEND_ORIGINS=${FRONTEND_ORIGINS:-}
+    volumes:
+      - ./reports:/reports

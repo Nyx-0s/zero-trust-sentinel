@@ -1,0 +1,17 @@
+I scanned 50 B2B SaaS companies. 30% had exposed admin panels.
+
+That's 15 companies where anyone on the internet can find a login page the team never meant to publish.
+
+Most CTOs don't have time to audit their external attack surface. It isn't that the tools don't exist — it's that nobody on the team has a free afternoon to run subdomain enumeration, probe live hosts, and interpret what comes back.
+
+So I built an AI agent that does it for you.
+
+Give it a domain and it maps your external-facing infrastructure, identifies the top 3 business risks in plain English (not CVSS scores — actual business impact: what it costs, what it exposes), and hands you copy-paste fixes for nginx, DNS, and cloud configs.
+
+It takes about 4 minutes. No agents to install. No access to your network. Nothing runs against anything except your public domain.
+
+Get your free risk score at [YourDomain]. No credit card required.
+
+If you're a founder or CTO of a B2B SaaS company, reply with your domain and I'll post the top finding publicly.
+
+#CyberSecurity #SaaS #CISO #InfoSec #Founders
