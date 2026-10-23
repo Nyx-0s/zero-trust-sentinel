@@ -12,7 +12,8 @@ from utils import robust_json_parse
 # --- LLM Configuration ---
 # Using Groq for speed/cost efficiency. Fallback to OpenAI if needed.
 llm = ChatOpenAI(
-    model="llama-3.3-70b-versatile",
+    # Groq retires model ids; GROQ_MODEL overrides without a code change.
+    model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
     temperature=0.1,
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY")

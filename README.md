@@ -175,6 +175,46 @@ any Docker host (see Step 2 and Step 4).
 
 ---
 
+## Card-Free Distributed Deployment (Replit + Neon + laptop Hunter)
+
+No credit card, no Docker: three cheap/free pieces that each do one job.
+
+| Component | Where it runs | Command |
+|---|---|---|
+| `api.py` + cockpit (16 endpoints, Digital Twin) | Replit free tier | `uvicorn api:app --host 0.0.0.0 --port 8080` (see [.replit](.replit)) |
+| `outbound_engine.py` (the Voice) | Replit, Shell tab | `python outbound_engine.py` |
+| `hunter.py` (the Brain - Groq-powered prospecting) | Your laptop | `python hunter.py --api https://YOUR-REPL --limit 10` |
+| Postgres | Neon free tier | `DATABASE_URL` secret in Replit |
+| PayPal | Sandbox REST app | secrets in Replit (`PAYPAL_MODE=sandbox`) |
+
+**Steps:**
+
+1. Replit -> Create Repl -> Import from GitHub -> `Nyx-0s/zero-trust-sentinel`.
+   (Importing a *private* repo may require a paid Replit plan - if gated,
+   make the repo public for the import: it contains no secrets.)
+2. The `.replit` file already sets the Run command. Set the Secrets tab:
+   `GROQ_API_KEY`, `RESEND_API_KEY`, `FROM_EMAIL`, `DATABASE_URL` (Neon),
+   `PAYPAL_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET`,
+   `PAYPAL_PLAN_ID=P-8E455735W3884671YNLNRSVQ`, `PAYPAL_WEBHOOK_ID`,
+   `SITE_URL=https://YOUR-REPL`, `MAX_EMAILS_PER_DAY=20`.
+3. Run. The cockpit is at your Replit URL; `GET /health` must return 200.
+4. In a Shell tab: `python outbound_engine.py` (the follow-up loop).
+5. On your laptop: `python hunter.py --api https://YOUR-REPL --dry-run` to
+   watch it confirm signals, then drop `--dry-run` to feed `/capture`.
+
+**Honest limits of the free tier:**
+
+- Replit free apps **sleep** when idle (Always On is paid). The Hunter pings
+  the API before each hunt, which wakes it; expect a ~30-60s cold start.
+- The Go scanner toolchain (subfinder/httpx/nuclei) is not installed on
+  Replit; the LangGraph analysis pipeline runs, but live-tool scan data comes
+  from wherever the full toolchain runs.
+- `hunter.py` replaces Harvey's *job* (signal discovery -> `/capture`) with
+  Groq; Harvey itself (ethanplusai/harvey) needs the Claude/Codex CLI and has
+  no Groq mode.
+
+---
+
 ## Step 3: The "First 10 Leads" Protocol
 
 This is a **content-marketing** loop, not cold outreach: public reports only, no emails without opt-in.

@@ -1,0 +1,10 @@
+# Replit configuration (card-free host for the API + cockpit)
+# The Run button starts the API; open a Shell tab for the outbound engine:
+#   python outbound_engine.py
+# Replit's free tier SLEEP after inactivity - Always On is a paid feature.
+# The laptop-side Hunter (python hunter.py) pings the API before each hunt,
+# which wakes the instance (cold start ~30-60s).
+run = "uvicorn api:app --host 0.0.0.0 --port 8080"
+entrypoint = "api.py"
+modules = ["python-3.11"]
+hidden = [".config"]

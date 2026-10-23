@@ -37,6 +37,18 @@ async def get_pool() -> asyncpg.Pool:
             if host not in ("localhost", "127.0.0.1"):
                 database_url += ("&" if "?" in database_url else "?") + "sslmode=require"
         _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
+        # JSONB columns (risk_assessment, raw_scan, payload, ...) decode to
+        # real dicts/lists; without this they arrive as strings and every
+        # consumer silently misbehaves (e.g. report.top_risks[:3] slices a
+        # string). Existing writers pass json.dumps(...), so the encoder
+        # passes strings through untouched.
+        async with _pool.acquire() as _conn:
+            await _conn.set_type_codec(
+                "jsonb", encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
+                decoder=json.loads, schema="pg_catalog")
+            await _conn.set_type_codec(
+                "json", encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
+                decoder=json.loads, schema="pg_catalog")
     return _pool
 
 
