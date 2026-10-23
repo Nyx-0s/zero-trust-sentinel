@@ -101,5 +101,11 @@ envVarGroups:
         value: "60"
       - key: JITTER_MAX_SECONDS
         value: "120"
-      - key: SKIP_HARVEY           # set to 1 to run the worker outbound-only
-        value: "0"
+      # Harvey's brain is the Claude or Codex CLI ONLY (verified in
+      # ethanplusai/harvey README + brain.py: no Groq/OpenAI-compatible mode,
+      # no fallback). Default1 = worker runs outbound-only; flip to "0" once
+      # a Claude login exists (`claude setup-token` -> CLAUDE_CODE_OAUTH_TOKEN
+      # or ANTHROPIC_API_KEY). GROQ_API_KEY still powers the LangGraph scan
+      # swarm in sentinel-web.
+      - key: SKIP_HARVEY
+        value: "1"

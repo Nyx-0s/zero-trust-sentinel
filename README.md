@@ -163,9 +163,12 @@ all declared in [`render.yaml`](render.yaml) as a Blueprint:
 **Plan notes (real numbers):** Render's Free Postgres **expires 30 days after
 creation**, so the Blueprint defaults to Starter ($7/mo). Free web/worker plans
 sleep after inactivity — bad for PayPal webhooks and a 24/7 pipeline — hence
-Starter there too. To run outbound-only (no Harvey), set `SKIP_HARVEY=1` on the
-worker; the worker also skips Harvey automatically when `ANTHROPIC_API_KEY` or
-the `claude` CLI is missing.
+Starter there too. **Harvey on Render defaults to off (`SKIP_HARVEY=1`)**:
+Harvey's brain is the Claude or Codex CLI only — it has no Groq mode (verified
+in its README/brain.py), and a headless container cannot run `claude login`
+interactively. Flip `SKIP_HARVEY` to `0` once you add a headless Claude token
+(`claude setup-token` -> `CLAUDE_CODE_OAUTH_TOKEN`) or `ANTHROPIC_API_KEY`.
+Groq (`GROQ_API_KEY`) still powers the LangGraph scan swarm in the web service.
 
 Prefer the VPS path? `./deploy.sh` + `supervisor.sh` still do the same job on
 any Docker host (see Step 2 and Step 4).
