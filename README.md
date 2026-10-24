@@ -50,8 +50,10 @@ Create a `.env` file in the project root:
 # LLM (free tier) - https://console.groq.com/keys
 GROQ_API_KEY=gsk_...
 
-# Email (free tier, permission-based only) - https://resend.com/api-keys
-RESEND_API_KEY=re_...
+# Email (free tier, permission-based only) - https://app.sendgrid.com/settings/api_keys
+# SendGrid is preferred (CNAME-only domain auth); Resend works as a fallback.
+SENDGRID_API_KEY=SG....
+# RESEND_API_KEY=re_...
 FROM_EMAIL=updates@yourdomain.com
 MAX_EMAILS_PER_DAY=20
 
@@ -88,18 +90,28 @@ host fail with `401 invalid_client`, so set `PAYPAL_MODE=sandbox` while testing.
 | Service | Where | Free tier |
 |---|---|---|
 | **Groq** | console.groq.com → API Keys | Yes, generous LLM limits |
-| **Resend** | resend.com → API Keys | 3,000 emails/month, 100/day |
+| **SendGrid** | app.sendgrid.com → Settings → API Keys (Mail Send scope) | 100 emails/day, 6,000/month |
+| **Resend** (fallback) | resend.com → API Keys | 3,000 emails/month, 100/day |
 | **Neon** | console.neon.tech → Connection Details | Yes, serverless Postgres |
 | **PayPal** | developer.paypal.com → My Apps & Credentials (REST app) | No monthly fee; per-transaction on cross-border USD |
 | **Stripe** | dashboard.stripe.com → Developers → API keys | Test mode, no fees until live |
 
-### Resend subdomain setup (do this before sending)
+### SendGrid domain setup (do this before sending)
 
-1. In Resend: **Domains → Add Domain** → enter `updates.yourdomain.com`.
-2. Copy the **exact** SPF, DKIM, and DMARC DNS records Resend gives you into your DNS provider.
-3. Start DMARC permissive: `v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com`.
-4. Wait for verification (usually <48h), then set `FROM_EMAIL=updates@yourdomain.com`.
+1. In SendGrid: **Settings → Sender Authentication → Authenticate Your Domain**
+   → enter your domain (free plan supports CNAME-only auth — no TXT needed,
+   which is why it works on hosts like InfinityFree that block custom TXT).
+2. Copy the **exact** CNAME records SendGrid gives you into your DNS provider
+   (for `zerodaysentinel.xo.je` these are `em3457`, `s1._domainkey`,
+   `s2._domainkey` — already live and verified, see GO_LIVE.md).
+3. Create an API key with **Mail Send** only and set `SENDGRID_API_KEY`.
+4. DMARC (`_dmarc` TXT, `p=none`) is advisory — add it if your DNS host allows
+   TXT records: `v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com`.
 5. Warm-up: send your first 5–10 emails to your own inbox before any outreach.
+
+Resend alternative: **Domains → Add Domain**, publish its SPF/DKIM/DMARC TXT
+records (requires a DNS host that allows TXT), then set `RESEND_API_KEY`
+instead — the code prefers SendGrid whenever both keys exist.
 
 ---
 
@@ -153,7 +165,7 @@ all declared in [`render.yaml`](render.yaml) as a Blueprint:
    automatically from `sentinel-db` (SSL is added by `db.py` when the host is
    not localhost).
 3. Open each service's **Environment** tab and fill the `sync: false` secrets
-   (GROQ, RESEND, ANTHROPIC for Harvey, PayPal, `SITE_URL` = the web service's
+   (GROQ, SENDGRID/RESEND, ANTHROPIC for Harvey, PayPal, `SITE_URL` = the web service's
    public URL). Nothing secret lives in git.
 4. Deploy. The first Docker build is heavy (Go toolchain + nuclei templates) —
    expect a long initial build. `init_db` creates the schema on first boot.
@@ -193,7 +205,7 @@ No credit card, no Docker: three cheap/free pieces that each do one job.
    (Importing a *private* repo may require a paid Replit plan - if gated,
    make the repo public for the import: it contains no secrets.)
 2. The `.replit` file already sets the Run command. Set the Secrets tab:
-   `GROQ_API_KEY`, `RESEND_API_KEY`, `FROM_EMAIL`, `DATABASE_URL` (Neon),
+   `GROQ_API_KEY`, `SENDGRID_API_KEY`, `FROM_EMAIL`, `DATABASE_URL` (Neon),
    `PAYPAL_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET`,
    `PAYPAL_PLAN_ID=P-8E455735W3884671YNLNRSVQ`, `PAYPAL_WEBHOOK_ID`,
    `SITE_URL=https://YOUR-REPL`, `MAX_EMAILS_PER_DAY=20`.

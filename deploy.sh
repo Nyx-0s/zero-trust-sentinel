@@ -85,7 +85,8 @@ else
     [ -t 0 ] || die "No .env and no interactive terminal. Copy .env.example and fill it in."
     {
         prompt_secret GROQ_API_KEY            "Groq API key (console.groq.com)"
-        prompt_secret RESEND_API_KEY           "Resend API key (resend.com/api-keys)"
+        prompt_optional SENDGRID_API_KEY       "SendGrid API key (app.sendgrid.com/settings/api_keys) - preferred"
+        prompt_optional RESEND_API_KEY         "Resend API key (resend.com/api-keys) - fallback"
         prompt_secret DATABASE_URL             "Neon Postgres URL (console.neon.tech)"
         prompt_optional STRIPE_SECRET_KEY     "Stripe secret key"
         prompt_optional STRIPE_WEBHOOK_SECRET "Stripe webhook secret"

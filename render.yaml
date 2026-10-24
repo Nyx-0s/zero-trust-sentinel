@@ -71,7 +71,9 @@ envVarGroups:
     envVars:
       - key: GROQ_API_KEY          # LangGraph swarm (Analyst/Editor/Critic)
         sync: false
-      - key: RESEND_API_KEY        # outbound engine (the "Voice")
+      - key: SENDGRID_API_KEY     # outbound engine (the "Voice") - preferred
+        sync: false
+      - key: RESEND_API_KEY        # fallback Voice provider
         sync: false
       - key: FROM_EMAIL
         sync: false

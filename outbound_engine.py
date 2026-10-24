@@ -13,10 +13,13 @@ from db import (
 )
 
 MAX_EMAILS_PER_DAY = int(os.getenv("MAX_EMAILS_PER_DAY", "20"))
+# Voice provider: SendGrid is preferred because its domain auth is CNAME-only
+# (the InfinityFree free zone cannot publish Resend's TXT DKIM/SPF records).
+# Resend stays as a fallback wherever its TXT records can be published.
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-# Resend subdomain best practice: set FROM_EMAIL to your verified subdomain,
-# e.g. updates.yourdomain.com (configured via environment).
-FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zero-trust-sentinel.com")
+# Set FROM_EMAIL to a sender on the verified domain.
+FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")
 
 
 class OutboundEngine:
@@ -37,30 +40,40 @@ class OutboundEngine:
             print("[CIRCUIT BREAKER] Suppressing email send.")
             return False
 
-        if not RESEND_API_KEY:
-            print("[WARN] RESEND_API_KEY not set, email skipped.")
+        if not SENDGRID_API_KEY and not RESEND_API_KEY:
+            print("[WARN] SENDGRID_API_KEY/RESEND_API_KEY not set, email skipped.")
             return False
 
-        payload = {
-            "from": FROM_EMAIL,
-            "to": [to_email],
-            "subject": subject,
-            "html": body.replace("\n", "<br>"),
-        }
+        html = body.replace("\n", "<br>")
+        if SENDGRID_API_KEY:
+            # SendGrid v3 mail/send - answers 202 Accepted
+            url = "https://api.sendgrid.com/v3/mail/send"
+            headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}"}
+            payload = {
+                "personalizations": [{"to": [{"email": to_email}]}],
+                "from": {"email": FROM_EMAIL},
+                "subject": subject,
+                "content": [{"type": "text/html", "value": html}],
+            }
+        else:
+            url = "https://api.resend.com/emails"
+            headers = {"Authorization": f"Bearer {RESEND_API_KEY}"}
+            payload = {
+                "from": FROM_EMAIL,
+                "to": [to_email],
+                "subject": subject,
+                "html": html,
+            }
 
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(
-                    "https://api.resend.com/emails",
-                    headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                    json=payload,
-                )
+                response = await client.post(url, headers=headers, json=payload)
             except Exception as e:
                 self.consecutive_failures += 1
                 print(f"[EMAIL ERROR] {to_email}: {e}")
                 return False
 
-            if response.status_code == 200:
+            if response.status_code in (200, 202):   # SendGrid answers 202
                 self.consecutive_failures = 0  # Reset counter on success
                 print(f"[EMAIL SENT] {to_email} | Subject: {subject}")
                 return True
@@ -234,6 +247,47 @@ Best,
         return subject, body
 
 
+    async def resend_health_check(self) -> bool:
+        """Startup DKIM/SPF probe: one real email FROM the Voice TO our own
+        security address.
+
+        Honest verdict - HOLD here means every follow-up this process attempts
+        will bounce, so the Autopilot is not live yet. Returns True on GO.
+        """
+        probe_to = "security@zerodaysentinel.xo.je"
+        provider = ("SendGrid" if SENDGRID_API_KEY
+                    else "Resend" if RESEND_API_KEY else None)
+        if not provider:
+            print("[HEALTHCHECK] HOLD: SENDGRID_API_KEY/RESEND_API_KEY not set - "
+                  "DKIM/SPF cannot be verified.")
+            return False
+
+        if FROM_EMAIL.split("@")[-1].strip().lower() != "zerodaysentinel.xo.je":
+            print(f"[HEALTHCHECK] WARN: FROM_EMAIL={FROM_EMAIL} is not on "
+                  f"zerodaysentinel.xo.je - {provider} will reject this sender.")
+
+        ok = await self._send_email(
+            probe_to,
+            "Autopilot",
+            "[Zero-Trust Sentinel] Startup health check",
+            "Startup probe from the outbound engine. If you can read this, "
+            f"DKIM/SPF wiring for {FROM_EMAIL} is live and the Voice can send.",
+        )
+        if ok:
+            print(f"[HEALTHCHECK] GO: {provider} accepted the test email "
+                  f"(from={FROM_EMAIL} -> {probe_to}).")
+        else:
+            print(f"[HEALTHCHECK] HOLD: {provider} rejected the test email "
+                  f"(from={FROM_EMAIL}). Check domain verification, DKIM and "
+                  "SPF before opening the Voice.")
+        return ok
+
+
 if __name__ == "__main__":
     engine = OutboundEngine()
-    asyncio.run(engine.run_loop())
+
+    async def _start() -> None:
+        await engine.resend_health_check()   # prove the Voice can send FIRST
+        await engine.run_loop()
+
+    asyncio.run(_start())

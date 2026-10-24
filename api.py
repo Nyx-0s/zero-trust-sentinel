@@ -818,29 +818,41 @@ After 3 months, your subscription will renew at $49/month.
 Zero-Trust Sentinel
 """
 
-    # Send via Resend
+    # Send via SendGrid (preferred) with Resend as fallback - same provider
+    # choice as outbound_engine._send_email.
+    SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
     RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-    FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zero-trust-sentinel.com")
+    FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")
 
-    if not RESEND_API_KEY:
-        print("[WARN] RESEND_API_KEY not set, win-back email skipped")
+    if not SENDGRID_API_KEY and not RESEND_API_KEY:
+        print("[WARN] SENDGRID_API_KEY/RESEND_API_KEY not set, win-back email skipped")
         return
 
-    payload = {
-        "from": FROM_EMAIL,
-        "to": [email],
-        "subject": subject,
-        "html": body.replace("\n", "<br>")
-    }
+    html = body.replace("\n", "<br>")
+    if SENDGRID_API_KEY:
+        # SendGrid v3 mail/send - answers 202 Accepted
+        url = "https://api.sendgrid.com/v3/mail/send"
+        headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}"}
+        payload = {
+            "personalizations": [{"to": [{"email": email}]}],
+            "from": {"email": FROM_EMAIL},
+            "subject": subject,
+            "content": [{"type": "text/html", "value": html}],
+        }
+    else:
+        url = "https://api.resend.com/emails"
+        headers = {"Authorization": f"Bearer {RESEND_API_KEY}"}
+        payload = {
+            "from": FROM_EMAIL,
+            "to": [email],
+            "subject": subject,
+            "html": html,
+        }
 
     async with httpx.AsyncClient() as client_http:
         try:
-            response = await client_http.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-                json=payload
-            )
-            if response.status_code == 200:
+            response = await client_http.post(url, headers=headers, json=payload)
+            if response.status_code in (200, 202):   # SendGrid answers 202
                 print(f"[WIN-BACK EMAIL] Sent to {email}")
             else:
                 print(f"[WIN-BACK EMAIL FAIL] {response.status_code}: {response.text}")

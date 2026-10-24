@@ -12,7 +12,8 @@ What is mocked:
   * LLM        - deterministic MockLLM returning fixed JSON for
                  Analyst / Fixer / Editor / Critic prompts (real LangGraph runs)
   * Scanners   - realistic raw_scan JSON for the target domain
-  * Resend     - httpx.AsyncClient intercepted; payloads logged to console
+  * Email      - httpx.AsyncClient intercepted (SendGrid v3 primary, Resend
+                 fallback); payloads normalized and logged to console
   * Stripe     - construct_event / Coupon.create faked; webhook payloads simulated
 
 Run:  python3 test_autopilot.py
@@ -35,6 +36,7 @@ from types import SimpleNamespace
 
 # --- Environment must be set BEFORE importing api (main.py reads GROQ_API_KEY at import) ---
 os.environ.setdefault("GROQ_API_KEY", "gsk_mock_for_simulation")
+os.environ.setdefault("SENDGRID_API_KEY", "SG.mock_for_simulation")
 os.environ.setdefault("RESEND_API_KEY", "re_mock_for_simulation")
 os.environ.setdefault("WIN_BACK_JITTER_SECONDS", "0")  # keep the simulation fast
 
@@ -721,6 +723,20 @@ class FakeAsyncClient:
             if "/v1/notifications/verify-webhook-signature" in url:
                 return _FakeHTTPResponse(200, _json.dumps({"verification_status": "SUCCESS"}))
             raise AssertionError(f"Unexpected PayPal call in simulation: {url}")
+        if "api.sendgrid.com" in url:
+            # SendGrid v3 payload -> normalize to the {to, subject} shape the
+            # stage assertions (and the Resend path) use.
+            tos = [t.get("email") for p in (json.get("personalizations") or [])
+                   for t in (p.get("to") or [])]
+            record = {
+                "to": tos,
+                "subject": json.get("subject"),
+                "from": (json.get("from") or {}).get("email"),
+                "provider": "sendgrid",
+            }
+            SENT_EMAILS.append(record)
+            print(f"    [MOCK SENDGRID] to={record['to']} subject={record['subject']!r}")
+            return _FakeHTTPResponse(202)   # SendGrid answers 202 Accepted
         if "api.resend.com" in url:
             SENT_EMAILS.append(json)
             print(f"    [MOCK RESEND] to={json.get('to')} subject={json.get('subject')!r}")
