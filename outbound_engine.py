@@ -287,7 +287,11 @@ if __name__ == "__main__":
     engine = OutboundEngine()
 
     async def _start() -> None:
-        await engine.resend_health_check()   # prove the Voice can send FIRST
+        # Prove the Voice can send FIRST, and gate lead mail on that proof:
+        # without GO every follow-up this process attempts would bounce.
+        if not await engine.resend_health_check():
+            print("[HEALTHCHECK] HOLD: engine will not mail any lead. Exiting.")
+            return
         await engine.run_loop()
 
     asyncio.run(_start())

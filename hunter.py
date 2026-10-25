@@ -36,6 +36,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+# The Face (static InfinityFree hosting) cannot accept POST /capture - leads
+# must be ingested by the Body, which owns the API and the database.
+API_URL = "https://zero-trust-sentinel--onthecontraryan.replit.app"
 UA = "Zero-Trust-Sentinel-Hunter/1.0 (public-surface discovery; GET-only)"
 API_PATHS = ["/docs", "/api", "/swagger", "/swagger-ui/", "/openapi.json", "/api/docs"]
 STAGING_PREFIXES = ["staging", "dev", "test", "uat"]
@@ -162,20 +165,47 @@ def groq_qualify(client: httpx.Client, api_key: str, industry: str,
 
 # --- Submission (harvey_discovery.md field contract) -------------------------
 
-def submit(api_base: str, domain: str, signals: List[str], harvey_ref: str) -> str:
-    r = httpx.post(
-        f"{api_base.rstrip('/')}/capture",
-        json={"domain": domain, "email": "", "name": "Discovered by Hunter",
-              "signals": signals, "harvey_ref": harvey_ref},
-        timeout=30,
-    )
-    body = r.json() if "json" in (r.headers.get("content-type") or "") else {}
-    return f"HTTP {r.status_code} status={body.get('status')} scan_id={body.get('scan_id')}"
+def submit(api_base: str, domain: str, signals: List[str],
+           harvey_ref: str) -> Tuple[bool, str]:
+    """POST /capture with an honest contract.
+
+    Only HTTP 200 *with* a scan_id is an ingest. A 3xx (Replit's 307 shield),
+    a 5xx (API down) or a transport error all mean the lead is NOT in the
+    Autopilot - they are reported as failures, never as submissions.
+    Returns (ok, detail).
+    """
+    url = f"{api_base.rstrip('/')}/capture"
+    try:
+        r = httpx.post(
+            url,
+            json={"domain": domain, "email": "", "name": "Discovered by Hunter",
+                  "signals": signals, "harvey_ref": harvey_ref},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        return False, f"API unreachable or shielded: {type(exc).__name__}: {exc}"
+
+    ctype = (r.headers.get("content-type") or "").lower()
+    body = r.json() if "json" in ctype else {}
+
+    if 300 <= r.status_code < 400:
+        return False, (f"API unreachable or shielded: HTTP {r.status_code} -> "
+                       f"{r.headers.get('location', '')}")
+    if r.status_code >= 500:
+        return False, f"API unreachable or shielded: HTTP {r.status_code}"
+    if r.status_code != 200:
+        msg = body.get("message") or body.get("error") or body.get("status")
+        return False, (f"HTTP {r.status_code} status={body.get('status')} "
+                       f"message={msg}")
+    if not body.get("scan_id"):
+        return False, f"HTTP 200 but no scan_id (lead not ingested): {body}"
+    return True, (f"HTTP 200 status={body.get('status')} "
+                  f"scan_id={body.get('scan_id')}")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Groq-powered prospecting loop")
-    ap.add_argument("--api", default=os.getenv("HUNTER_API_URL", "http://localhost:8000"),
+    ap.add_argument("--api", default=os.getenv("HUNTER_API_URL", API_URL),
                     help="Sentinel API base URL (default: %(default)s)")
     ap.add_argument("--csv", default="marketing/seed_leads.csv")
     ap.add_argument("--limit", type=int, default=10, help="max targets to hunt")
@@ -194,7 +224,7 @@ def main() -> int:
     print(f"Hunting {len(targets)} targets from {args.csv} against {args.api}"
           + (" (DRY RUN)" if args.dry_run else ""))
 
-    submitted = qualified = 0
+    submitted = qualified = failed = 0
     ref_seq = 0
     with httpx.Client(headers={"User-Agent": UA}, follow_redirects=True) as client:
         for t in targets:
@@ -222,16 +252,26 @@ def main() -> int:
             proof = evidence.get("exposed_api_url") or evidence.get("staging_host") or "-"
             print(f"  {domain:<16} QUALIFIED   signals={signals} proof={proof}")
             if args.dry_run:
-                print(f"      (dry run) would POST /capture ref={harvey_ref}")
+                print(f"      (dry run) would POST {args.api}/capture "
+                      f"domain={domain} signals={signals} ref={harvey_ref}")
             else:
                 try:
-                    print(f"      {submit(args.api, domain, signals, harvey_ref)} ref={harvey_ref}")
+                    ok, detail = submit(args.api, domain, signals, harvey_ref)
+                except Exception as exc:  # a submit must never crash the hunt
+                    ok, detail = (False,
+                                  f"API unreachable or shielded: "
+                                  f"{type(exc).__name__}: {exc}")
+                if ok:
                     submitted += 1
-                except Exception as exc:
-                    print(f"      submit failed: {type(exc).__name__}: {exc}")
+                    print(f"      \u2705 [HUNT] {domain} ingested. {detail} "
+                          f"ref={harvey_ref}")
+                else:
+                    failed += 1
+                    print(f"      \u274c [HUNT] {domain} failed: {detail}")
             time.sleep(1.5)
 
-    print(f"\nDone: {qualified} qualified, {submitted} submitted"
+    print(f"\nDone: {qualified} qualified, {submitted} ingested"
+          + (f", {failed} FAILED" if failed else "")
           + (" (dry run - nothing submitted)" if args.dry_run else ""))
     return 0
 
