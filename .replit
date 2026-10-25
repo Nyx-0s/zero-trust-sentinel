@@ -4,7 +4,7 @@
 # Replit's free tier SLEEP after inactivity - Always On is a paid feature.
 # The laptop-side Hunter (python hunter.py) pings the API before each hunt,
 # which wakes the instance (cold start ~30-60s).
-run = "uvicorn api:app --host 0.0.0.0 --port 8080"
+run = "bash replit_run.sh"
 entrypoint = "api.py"
 modules = ["web", "python-3.12", "bash"]
 hidden = [".config"]
