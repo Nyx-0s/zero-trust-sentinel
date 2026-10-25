@@ -9,6 +9,12 @@
 reports/
 harvey.local.yaml
 
+# Scratch output from running the engine in a shell (never committed)
+engine_state.txt
+engine_pg.txt
+voice_out*.txt
+diag*.txt
+
 # Python
 __pycache__/
 *.pyc
