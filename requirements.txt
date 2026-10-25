@@ -31,3 +31,4 @@ stripe>=8.0.0
 # CSV support (built-in, but listed for clarity)
 
 # Security tools would be installed system-wide via Go in Docker
+langchain-core

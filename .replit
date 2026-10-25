@@ -11,3 +11,8 @@ hidden = [".config"]
 
 [nix]
 channel = "stable-25_05"
+packages = ["libxcrypt", "postgresql"]
+
+[[ports]]
+localPort = 8080
+externalPort = 80
