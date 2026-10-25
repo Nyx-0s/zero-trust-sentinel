@@ -476,9 +476,16 @@
 <script>
     // ===== CONFIG =========================================================
     // Same-origin by default: the API serves this site, so no CORS or domain
-    // mismatch. Hosted elsewhere? Append ?api=https://your-api-domain.com
+    // mismatch. Override with ?api=https://your-api-domain.com
+    // The Face (zerodaysentinel.xo.je) is static InfinityFree hosting: it
+    // cannot accept POST /capture, /simulate or the PayPal webhook. Served
+    // from the Face, every API call must target the Body instead of origin,
+    // otherwise a visitor's scan dies on the host that has no API.
+    const FACE_HOSTS = ['zerodaysentinel.xo.je', 'www.zerodaysentinel.xo.je'];
+    const DEFAULT_API = 'https://zero-trust-sentinel--onthecontraryan.replit.app';
     const API_BASE = new URLSearchParams(window.location.search).get('api')
-        || window.location.origin;
+        || (FACE_HOSTS.includes(window.location.hostname) ? DEFAULT_API
+            : window.location.origin);
     // Public identifiers, safe to ship in the page (PayPal JS SDK + $49/mo plan).
     const PAYPAL_CLIENT_ID = 'BAA6kidDpEqUmq30fZmQu_Sur_SpK-zF1rNiibMkznTWWuP2OiGiIMQJ3sJE2yPO3RJ_TzNrSxGDqBfNZw';
     const PAYPAL_PLAN_ID = 'P-8E455735W3884671YNLNRSVQ';
