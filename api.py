@@ -66,6 +66,7 @@ from db import (
     get_referral_by_domain,
     apply_referral_discount,
     update_lead_task_status,
+    update_lead_task_metadata,
     set_lead_signals,
     get_lead_signals,
     claim_lead_task,
@@ -298,6 +299,25 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
             "referral_applied": bool(referral)}
 
 
+async def _fail_lead_task(task_id: int, error: str) -> None:
+    """Mark a lead failed *and record why*.
+
+    lead_tasks has no error column, so before this the Face only ever showed
+    "Assessment failed" while the real cause (a Groq 429, a DNS miss) lived
+    in stdout nobody could read. metadata.error is that missing message.
+    """
+    try:
+        await update_lead_task_metadata(
+            task_id,
+            {"error": str(error),
+             "failed_at": datetime.utcnow().isoformat(timespec="seconds") + "Z"},
+        )
+    except Exception as meta_err:
+        # Never let bookkeeping hide the failure itself.
+        print(f"[LEAD ERROR] task {task_id}: could not persist error: {meta_err}")
+    await update_lead_task_status(task_id, "failed")
+
+
 async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
                             signals: Optional[List[str]] = None):
     """
@@ -334,7 +354,7 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
         raw_scan = await run_full_scan(domain)
 
         if "error" in raw_scan:
-            await update_lead_task_status(task_id, "failed")
+            await _fail_lead_task(task_id, raw_scan["error"])
             return
 
         # Heartbeat: the probe took real time, refresh the lease before the
@@ -372,7 +392,7 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
 
     except Exception as e:
         print(f"[LEAD ERROR] {domain}: {e}")
-        await update_lead_task_status(task_id, "failed")
+        await _fail_lead_task(task_id, e)
 
 
 # -- Lead scan durability -----------------------------------------------------

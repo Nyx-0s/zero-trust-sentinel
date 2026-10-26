@@ -1,7 +1,9 @@
 import json
 import os
+import re
+import time
 import asyncio
-from typing import TypedDict, List, Dict, Optional
+from typing import TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -18,6 +20,87 @@ llm = ChatOpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY")
 )
+
+# --- Rate limiting ----------------------------------------------------------
+# Groq's free tier meters 8,000 TPM / 200,000 TPD. A burst of concurrent
+# scans trips HTTP 429 ("Rate limit reached ... Please try again in 24.615s")
+# and every analysis in flight dies with it - which is exactly how the
+# landing page's captures were failing. This token bucket keeps all agents
+# inside a budget the account really has, run_scan() retries what still gets
+# through, and the leads that do fail record why (see api._fail_lead_task).
+
+GROQ_TPM_LIMIT = int(os.getenv("GROQ_TPM_LIMIT", "7500"))   # 0 disables
+# Tokens charged per agent call. Groq bills prompt + completion, and the
+# observed 429 asked for 3,600 tokens at once, so a token-thin hold (150)
+# would throttle nothing. settle() refunds the difference against the usage
+# the response actually reports, so the bucket tracks reality over time.
+GROQ_CALL_TOKENS = int(os.getenv("GROQ_CALL_TOKEN_ESTIMATE", "1500"))
+
+
+class GroqRateLimiter:
+    """Token bucket every agent must pass before it talks to Groq."""
+
+    def __init__(self, max_tokens_per_minute: int = GROQ_TPM_LIMIT,
+                 call_cost: int = GROQ_CALL_TOKENS):
+        self.max_tokens = float(max_tokens_per_minute)
+        self.call_cost = float(call_cost)
+        self.tokens = self.max_tokens
+        self.last_refill = time.monotonic()
+        self.lock = asyncio.Lock()
+
+    def _refill(self) -> None:
+        """Credit tokens back for time passed (capped at one minute's budget)."""
+        now = time.monotonic()
+        self.tokens = min(
+            self.max_tokens,
+            self.tokens + (now - self.last_refill) * (self.max_tokens / 60.0),
+        )
+        self.last_refill = now
+
+    async def acquire(self, token_cost: Optional[float] = None) -> float:
+        """Hold token budget before an LLM call; wait out an empty minute."""
+        if self.max_tokens <= 0:
+            return 0.0  # throttling disabled (tests, or a paid tier)
+        cost = float(self.call_cost if token_cost is None else token_cost)
+        async with self.lock:
+            self._refill()
+            if self.tokens < cost:
+                await asyncio.sleep((cost - self.tokens) / (self.max_tokens / 60.0))
+                self._refill()
+            self.tokens -= cost
+        return cost
+
+    async def settle(self, hold: float, response: Any) -> None:
+        """Refund the part of the hold the call did not actually spend."""
+        if hold <= 0:
+            return
+        usage = getattr(response, "usage_metadata", None)
+        actual = usage.get("total_tokens") if isinstance(usage, dict) else None
+        if not isinstance(actual, (int, float)) or actual >= hold:
+            return
+        async with self.lock:
+            self._refill()
+            self.tokens = min(self.max_tokens, self.tokens + (hold - actual))
+
+
+groq_limiter = GroqRateLimiter()
+
+
+_RATE_LIMIT_AFTER = re.compile(r"try again in ([\d.]+)s", re.IGNORECASE)
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return "429" in text or "rate limit" in text.lower()
+
+
+def _rate_limit_delay(exc: BaseException, attempt: int) -> float:
+    """Groq states the wait exactly ('Please try again in 24.615s'); use it."""
+    match = _RATE_LIMIT_AFTER.search(str(exc))
+    if match:
+        return min(max(float(match.group(1)), 1.0), 120.0)
+    return min(30.0 * attempt, 120.0)
+
 
 # --- State Definition ---
 class ScanState(TypedDict):
@@ -108,7 +191,9 @@ async def analyst(state: ScanState) -> Dict:
         feedback_context=feedback_context,
         signals_context=signals_context,
     )
+    hold = await groq_limiter.acquire()
     response = await llm.ainvoke(messages)
+    await groq_limiter.settle(hold, response)
     
     # Use Robust JSON Parser from utils
     parsed = robust_json_parse(response.content)
@@ -149,7 +234,9 @@ async def fixer(state: ScanState) -> Dict:
     """)
     
     messages = prompt.format(domain=domain, risks=json.dumps(risks))
+    hold = await groq_limiter.acquire()
     response = await llm.ainvoke(messages)
+    await groq_limiter.settle(hold, response)
     
     parsed = robust_json_parse(response.content)
     if "fixes" not in parsed:
@@ -195,7 +282,9 @@ async def editor(state: ScanState) -> Dict:
     messages = prompt.format(
         domain=domain, score=score, risks=json.dumps(risks), signals_context=signals_context,
     )
+    hold = await groq_limiter.acquire()
     response = await llm.ainvoke(messages)
+    await groq_limiter.settle(hold, response)
     
     return {"executive_summary": response.content, "risk_score": score}
 
@@ -236,7 +325,9 @@ async def critic(state: ScanState) -> Dict:
         risks=json.dumps(risks),
         fixes=json.dumps(fixes)
     )
+    hold = await groq_limiter.acquire()
     response = await llm.ainvoke(messages)
+    await groq_limiter.settle(hold, response)
     
     parsed = robust_json_parse(response.content)
     if "errors" not in parsed:
@@ -278,11 +369,13 @@ workflow.add_conditional_edges(
 app = workflow.compile()
 
 # --- Execution Function ---
-async def run_scan(domain: str, client_id: str = None, signals: List[str] = None) -> Dict:
+async def run_scan(domain: str, client_id: str = None, signals: List[str] = None,
+                   max_retries: int = 3) -> Dict:
     """Entry point for the scanning process.
 
     signals: optional discovery signals (e.g. ["exposed_api"]) that the Analyst
     and Editor prioritize and reference in the executive summary.
+    max_retries: attempts on Groq 429 (each waits out Groq's stated delay).
     """
     initial_state = {
         "domain": domain,
@@ -296,9 +389,25 @@ async def run_scan(domain: str, client_id: str = None, signals: List[str] = None
         "client_id": client_id,
         "signals": signals or [],
     }
-    
-    # Run the graph
-    final_state = await app.ainvoke(initial_state)
+
+    # Run the graph, retrying only on Groq's rate limit: the free tier meters
+    # per minute and per day, so the scans that lose a burst's race get a 429
+    # while their siblings succeed. Anything else still raises immediately.
+    final_state: Optional[Dict] = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            final_state = await app.ainvoke(initial_state)
+            break
+        except Exception as e:
+            if attempt >= max_retries or not _is_rate_limit_error(e):
+                raise
+            delay = _rate_limit_delay(e, attempt)
+            print(f"[RATE LIMIT] Groq 429 for {domain}; "
+                  f"retry {attempt}/{max_retries - 1} in {delay:.1f}s")
+            await asyncio.sleep(delay)
+    if final_state is None:
+        raise RuntimeError(f"run_scan produced no result for {domain}")
+
     
     # Post-processing: Save to DB (Simulated here)
     if final_state.get("risk_score", 100) < 80:

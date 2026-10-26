@@ -755,6 +755,21 @@ async def update_lead_task_status(task_id: int, status: str) -> None:
         )
 
 
+async def update_lead_task_metadata(task_id: int, patch: Dict[str, Any]) -> None:
+    """Shallow-merge a patch into lead_tasks.metadata (Postgres JSONB ||).
+
+    Failed leads store their real error here: status='failed' on its own says
+    nothing about *why*, and there is no error column to use instead.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE lead_tasks SET metadata = coalesce(metadata, '{}'::jsonb) || $1::jsonb, "
+            "updated_at = NOW() WHERE id = $2",
+            json.dumps(patch or {}), task_id,
+        )
+
+
 async def set_lead_signals(task_id: int, signals: List[str], harvey_ref: str = "") -> None:
     """Persist Harvey discovery signals + reference on a lead (metadata JSONB)."""
     pool = await get_pool()

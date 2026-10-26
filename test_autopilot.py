@@ -36,6 +36,7 @@ from types import SimpleNamespace
 
 # --- Environment must be set BEFORE importing api (main.py reads GROQ_API_KEY at import) ---
 os.environ.setdefault("GROQ_API_KEY", "gsk_mock_for_simulation")
+os.environ.setdefault("GROQ_TPM_LIMIT", "0")  # no throttling: the simulation is instant
 os.environ.setdefault("SENDGRID_API_KEY", "SG.mock_for_simulation")
 os.environ.setdefault("RESEND_API_KEY", "re_mock_for_simulation")
 os.environ.setdefault("WIN_BACK_JITTER_SECONDS", "0")  # keep the simulation fast
@@ -265,6 +266,21 @@ class MockDatabase:
             self.conn.execute(
                 "UPDATE lead_tasks SET status = ?, updated_at = ? WHERE id = ?",
                 (status, now_iso(), task_id))
+            self.conn.commit()
+
+    async def update_lead_task_metadata(self, task_id: int, patch: dict) -> None:
+        """JSONB || merge, mirroring db.update_lead_task_metadata."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT metadata FROM lead_tasks WHERE id = ?", (task_id,)).fetchone()
+            try:
+                meta = json.loads(row["metadata"]) if row and row["metadata"] else {}
+            except (TypeError, json.JSONDecodeError):
+                meta = {}
+            meta.update(patch or {})
+            self.conn.execute(
+                "UPDATE lead_tasks SET metadata = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(meta), now_iso(), task_id))
             self.conn.commit()
 
     # -- lead-scan durability (mirrors db.py's lease/sweep surface) --------
