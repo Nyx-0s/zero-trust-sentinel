@@ -68,6 +68,9 @@ from db import (
     update_lead_task_status,
     set_lead_signals,
     get_lead_signals,
+    claim_lead_task,
+    is_lead_task_stale,
+    list_recoverable_lead_tasks,
 )
 from utils import is_valid_domain, sanitize_domain
 
@@ -301,7 +304,31 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
     Runs the scan and updates the lead's status in the DB.
     If risk_score < 80, marks the lead as 'hot' for the outbound engine.
     signals: Harvey discovery signals threaded into the Analyst/Editor prompts.
+
+    Ownership is a lease, not a promise: the in-process task can die with the
+    instance (cloudrun scale-to-zero, redeploy), so every run must first win
+    claim_lead_task(), and recovery paths re-dispatch until a run finishes.
     """
+    # Lease acquisition. A failed claim means another worker owns this lead -
+    # exit silently rather than scan it twice. A claim *error* is left alone so
+    # the sweeper can retry instead of marking a healthy lead failed.
+    try:
+        lead = await get_lead_task(task_id)
+        if not lead:
+            return
+        acquired = await claim_lead_task(task_id, lead.get("updated_at"))
+    except Exception as e:
+        print(f"[RECOVERY] claim failed for {domain} (task {task_id}): {e}")
+        return
+    if not acquired:
+        return
+
+    if signals is None:
+        try:
+            signals = await get_lead_signals(domain)
+        except Exception:
+            signals = []
+
     try:
         from scanners import run_full_scan
         raw_scan = await run_full_scan(domain)
@@ -309,6 +336,10 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
         if "error" in raw_scan:
             await update_lead_task_status(task_id, "failed")
             return
+
+        # Heartbeat: the probe took real time, refresh the lease before the
+        # slow LLM step so the sweeper does not double-dispatch a live run.
+        await update_lead_task_status(task_id, "running")
 
         # Reports FK references clients.id, so resolve/create a client account
         client = await get_client_by_domain(domain)
@@ -320,15 +351,17 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
         # Run LangGraph for full analysis (signals prioritize the Analyst)
         result = await run_scan(domain, client_id=str(client_db_id), signals=signals)
 
-        # Save report against the real client account
-        await create_report(
-            client_id=client_db_id,
-            risk_score=result.get("risk_score", 100),
-            executive_summary=result.get("executive_summary", ""),
-            raw_scan=result.get("raw_scan", {}),
-            risk_assessment=result.get("risk_assessment", []),
-            remediation_plan=result.get("remediation_plan", []),
-        )
+        # Save report against the real client account - but never twice: a
+        # recovery run that follows a crash must not duplicate the report.
+        if not await get_latest_report_by_domain(domain):
+            await create_report(
+                client_id=client_db_id,
+                risk_score=result.get("risk_score", 100),
+                executive_summary=result.get("executive_summary", ""),
+                raw_scan=result.get("raw_scan", {}),
+                risk_assessment=result.get("risk_assessment", []),
+                remediation_plan=result.get("remediation_plan", []),
+            )
 
         # Mark as hot if vulnerable, otherwise complete
         if result.get("risk_score", 100) < 80:
@@ -340,6 +373,86 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
     except Exception as e:
         print(f"[LEAD ERROR] {domain}: {e}")
         await update_lead_task_status(task_id, "failed")
+
+
+# -- Lead scan durability -----------------------------------------------------
+# The Face's /capture returns immediately and the work runs in-process, which
+# is exactly what dies on a scale-to-zero Deployment. These three paths bring
+# stranded scans back: startup (after a redeploy), every /task poll (the Face
+# polls until terminal), and a slow periodic sweep for unpolled leads.
+
+LEAD_PENDING_STALE_SECONDS = 45    # a fresh capture is never stale (Face polls ~2s)
+LEAD_RUNNING_STALE_SECONDS = 900   # analysis lease, refreshed by the heartbeat
+LEAD_SWEEP_INTERVAL_SECONDS = 60
+_lead_sweep_task: Optional[asyncio.Task] = None
+
+
+async def _dispatch_lead_scan(task_id: int, domain: str, email: str,
+                              name: str) -> None:
+    """Start (or re-start) a lead scan. The claim inside decides ownership."""
+    signals = await get_lead_signals(domain)
+    asyncio.create_task(process_lead_scan(task_id, domain, email, name,
+                                          signals=signals))
+
+
+async def recover_stale_lead_scans(limit: int = 5) -> int:
+    """Re-queue lead scans whose in-process worker died. Returns resumed count."""
+    try:
+        stale = await list_recoverable_lead_tasks(
+            pending_after=LEAD_PENDING_STALE_SECONDS,
+            running_after=LEAD_RUNNING_STALE_SECONDS,
+            limit=limit,
+        )
+    except Exception as e:
+        print(f"[RECOVERY] sweep failed: {e}")
+        return 0
+    for lead in stale:
+        print(f"[RECOVERY] resuming stranded lead scan: task {lead['id']} "
+              f"{lead.get('domain')} (last seen {lead.get('updated_at')})")
+        await _dispatch_lead_scan(lead["id"], lead.get("domain") or "",
+                                  lead.get("email") or "",
+                                  lead.get("name") or "there")
+    return len(stale)
+
+
+async def _lead_sweep_loop() -> None:
+    while True:
+        await asyncio.sleep(LEAD_SWEEP_INTERVAL_SECONDS)
+        await recover_stale_lead_scans()
+
+
+_last_lead_sweep: float = float("-inf")   # first poll always sweeps
+
+
+async def _maybe_sweep_stale_lead_scans() -> None:
+    """Run the cross-lead sweep at most once per interval.
+
+    Driven by /task polls so a stranded lead with no poller of its own
+    (a Hunter-ingested lead) is reclaimed by other traffic, instead of
+    waiting for the periodic loop or a restart.
+    """
+    global _last_lead_sweep
+    now = asyncio.get_event_loop().time()
+    if now - _last_lead_sweep < LEAD_SWEEP_INTERVAL_SECONDS:
+        return
+    _last_lead_sweep = now   # set first: overlapping polls never double-sweep
+    n = await recover_stale_lead_scans()
+    if n:
+        print(f"[RECOVERY] poll-driven sweep resumed {n} lead scan(s)")
+
+
+@app.on_event("startup")
+async def start_lead_recovery() -> None:
+    """Drain stranded scans left by the previous instance, then keep sweeping."""
+    global _lead_sweep_task
+    await recover_stale_lead_scans()
+    _lead_sweep_task = asyncio.create_task(_lead_sweep_loop())
+
+
+@app.on_event("shutdown")
+async def stop_lead_recovery() -> None:
+    if _lead_sweep_task is not None:
+        _lead_sweep_task.cancel()
 
 
 def _signal_note(signals: List[str]) -> str:
@@ -871,6 +984,23 @@ async def get_task(task_id: str) -> Dict[str, Any]:
     if task_id.isdigit():
         lead = await get_lead_task(int(task_id))
         if lead:
+            # The Face polls until a terminal state, so each poll is a chance
+            # to resume a scan whose in-process worker died (scale-to-zero,
+            # redeploy, crash). The claim inside decides who owns the rerun.
+            try:
+                stale = await is_lead_task_stale(
+                    int(task_id),
+                    pending_after=LEAD_PENDING_STALE_SECONDS,
+                    running_after=LEAD_RUNNING_STALE_SECONDS,
+                )
+            except Exception:
+                stale = False
+            if stale:
+                print(f"[RECOVERY] /task/{task_id}: resuming stranded lead scan")
+                await _dispatch_lead_scan(int(task_id), lead["domain"],
+                                          lead.get("email") or "",
+                                          lead.get("name") or "there")
+            await _maybe_sweep_stale_lead_scans()
             return {
                 "status": lead["status"],
                 "domain": lead["domain"],

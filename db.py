@@ -317,8 +317,75 @@ async def get_lead_task(task_id: int) -> Optional[Dict[str, Any]]:
         row = await conn.fetchrow("SELECT * FROM lead_tasks WHERE id = $1", task_id)
         if row:
             return {"id": row["id"], "domain": row["domain"], "email": row["email"],
-                    "name": row["name"], "status": row["status"]}
+                    "name": row["name"], "status": row["status"],
+                    "updated_at": row["updated_at"]}
         return None
+
+
+async def claim_lead_task(task_id: int, observed_updated_at: Any) -> bool:
+    """Take ownership of a lead scan (lease acquisition).
+
+    CAS on updated_at: exactly one worker can flip the row to 'running', so a
+    recovery sweep racing a live scan can never start the same lead twice.
+    The observed timestamp comes from get_lead_task; NULL is matched explicitly
+    because a comparison against NULL would otherwise never succeed.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE lead_tasks SET status = 'running', updated_at = NOW() "
+            "WHERE id = $1 AND status IN ('pending', 'running') "
+            "AND (($2::timestamp IS NULL AND updated_at IS NULL) "
+            "     OR updated_at = $2::timestamp) "
+            "RETURNING id",
+            task_id, observed_updated_at,
+        )
+        return row is not None
+
+
+async def is_lead_task_stale(task_id: int, pending_after: int = 45,
+                             running_after: int = 900) -> bool:
+    """True when a lead's scan shows no live worker: still 'pending' with no
+    progress, or a 'running' lease that expired (worker died mid-scan).
+    Clock comparisons stay in SQL so app and DB never disagree about time.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT ((status = 'pending' "
+            "         AND (updated_at IS NULL "
+            "              OR updated_at < NOW() - make_interval(secs => $2::int))) "
+            "        OR (status = 'running' "
+            "            AND (updated_at IS NULL "
+            "                 OR updated_at < NOW() - make_interval(secs => $3::int)))) "
+            "        AS stale "
+            "FROM lead_tasks WHERE id = $1",
+            task_id, pending_after, running_after,
+        )
+        return bool(row["stale"]) if row else False
+
+
+async def list_recoverable_lead_tasks(pending_after: int = 45,
+                                      running_after: int = 900,
+                                      limit: int = 5) -> List[Dict[str, Any]]:
+    """Lead scans stranded without a live worker (in-process task died with the
+    instance, redeploy, or crash). Terminal states are never returned.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, domain, email, name, updated_at FROM lead_tasks "
+            "WHERE (status = 'pending' "
+            "        AND (updated_at IS NULL "
+            "             OR updated_at < NOW() - make_interval(secs => $1::int))) "
+            "   OR (status = 'running' "
+            "       AND (updated_at IS NULL "
+            "            OR updated_at < NOW() - make_interval(secs => $2::int))) "
+            "ORDER BY updated_at ASC NULLS FIRST LIMIT $3",
+            pending_after, running_after, limit,
+        )
+        return [{"id": r["id"], "domain": r["domain"], "email": r["email"],
+                 "name": r["name"], "updated_at": r["updated_at"]} for r in rows]
 
 
 async def mark_lead_hot(task_id: int, email: str, name: str) -> None:

@@ -267,6 +267,66 @@ class MockDatabase:
                 (status, now_iso(), task_id))
             self.conn.commit()
 
+    # -- lead-scan durability (mirrors db.py's lease/sweep surface) --------
+    async def claim_lead_task(self, task_id: int, observed_updated_at) -> bool:
+        """CAS lease: exactly one worker may move a lead to 'running'."""
+        with self.lock:
+            cur = self.conn.execute(
+                "UPDATE lead_tasks SET status = 'running', updated_at = ? "
+                "WHERE id = ? AND status IN ('pending', 'running') "
+                "AND ((? IS NULL AND updated_at IS NULL) OR updated_at = ?)",
+                (now_iso(), task_id, observed_updated_at, observed_updated_at))
+            self.conn.commit()
+            return cur.rowcount == 1
+
+    @staticmethod
+    def _lead_age_seconds(row) -> float | None:
+        """Age of a lead's last progress, or None when the row is gone."""
+        if not row:
+            return None
+        if not row["updated_at"]:
+            return float("inf")
+        try:
+            ts = datetime.fromisoformat(row["updated_at"])
+        except (TypeError, ValueError):
+            return float("inf")
+        return (datetime.utcnow().replace(microsecond=0) - ts).total_seconds()
+
+    async def is_lead_task_stale(self, task_id: int, pending_after: int = 45,
+                                 running_after: int = 900) -> bool:
+        # SQLite has no NOW(), so age is computed against stored UTC timestamps
+        # exactly as Postgres compares them to NOW().
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT status, updated_at FROM lead_tasks WHERE id = ?",
+                (task_id,)).fetchone()
+        if not row or row["status"] not in ("pending", "running"):
+            return False
+        age = self._lead_age_seconds(row)
+        if age is None:
+            return False
+        return age > (pending_after if row["status"] == "pending" else running_after)
+
+    async def list_recoverable_lead_tasks(self, pending_after: int = 45,
+                                          running_after: int = 900,
+                                          limit: int = 5) -> list:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, domain, email, name, updated_at, status FROM lead_tasks "
+                "WHERE status IN ('pending', 'running') ORDER BY updated_at ASC",
+            ).fetchall()
+        out = []
+        for row in rows:
+            threshold = (pending_after if row["status"] == "pending"
+                         else running_after)
+            if (self._lead_age_seconds(row) or 0) > threshold:
+                out.append({"id": row["id"], "domain": row["domain"],
+                            "email": row["email"], "name": row["name"],
+                            "updated_at": row["updated_at"]})
+            if len(out) >= limit:
+                break
+        return out
+
     async def set_lead_signals(self, task_id: int, signals: list, harvey_ref: str = "") -> None:
         with self.lock:
             row = self.conn.execute(
@@ -808,7 +868,7 @@ def install_mocks(mock_db: MockDatabase) -> None:
 
 
 # =============================================================================
-# The 14-stage simulation
+# The 15-stage simulation
 # =============================================================================
 
 TARGET_DOMAIN = "stripe.com"
@@ -1113,6 +1173,90 @@ def run_simulation() -> None:
               f"detect_h={base14.get('time_to_detect_hours_p50')}->" 
               f"{full14.get('time_to_detect_hours_p50')} saved={bool(saved14)} "
               f"orphan={orphan.status_code} section={twin_section}")
+
+        # ---- Stage 15: a scan stranded by a dead worker recovers ----------
+        # Reproduces the cloudrun failure mode: /capture returned, then the
+        # in-process task died before doing any work, leaving the lead
+        # 'pending' with an old timestamp. The /task poll must resume it, and
+        # the resumed run must not write a second report for the same domain.
+        stranded15 = asyncio.run(mock_db.create_lead_task(
+            "stripe.com", "", "Stranded by a dead worker"))
+        with mock_db.lock:
+            mock_db.conn.execute(
+                "UPDATE lead_tasks SET status = 'pending', updated_at = ? WHERE id = ?",
+                ((datetime.utcnow().replace(microsecond=0)
+                  - timedelta(seconds=600)).isoformat(sep=" "), stranded15))
+            mock_db.conn.commit()
+
+        cid15 = asyncio.run(mock_db.get_client_by_domain("stripe.com"))["id"]
+        reports_before15 = len(asyncio.run(mock_db.list_reports_by_client(cid15)))
+
+        stale15 = asyncio.run(mock_db.is_lead_task_stale(stranded15))
+        recoverable15 = asyncio.run(mock_db.list_recoverable_lead_tasks())
+        client.get(f"/task/{stranded15}")   # a poll is the recovery trigger
+
+        status15 = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            t15 = client.get(f"/task/{stranded15}").json()
+            status15 = t15.get("status")
+            if status15 in ("hot", "completed", "failed"):
+                break
+            time.sleep(0.2)
+
+        reports_after15 = len(asyncio.run(mock_db.list_reports_by_client(cid15)))
+
+        # Second strand, this one with nobody polling it (a Hunter-ingested
+        # lead): only a sweep can bring it back, and the trigger must be
+        # someone else's poll - the sweep has to run on the app's live loop,
+        # never on a throwaway asyncio.run loop that dies with the call.
+        stranded_sweep15 = asyncio.run(mock_db.create_lead_task(
+            "stripe.com", "", "Stranded, no poller"))
+        with mock_db.lock:
+            mock_db.conn.execute(
+                "UPDATE lead_tasks SET status = 'pending', updated_at = ? WHERE id = ?",
+                ((datetime.utcnow().replace(microsecond=0)
+                  - timedelta(seconds=600)).isoformat(sep=" "), stranded_sweep15))
+            mock_db.conn.commit()
+
+        api._last_lead_sweep = float("-inf")   # bypass the 60 s throttle
+        client.get(f"/task/{stranded15}")     # another lead's poll drives the sweep
+
+        # The sweep, not this test, must unstick the row: watch it directly so
+        # a later /task poll cannot mask a sweep that never fired.
+        sweep_claimed15 = False
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            row15 = asyncio.run(mock_db.get_lead_task(stranded_sweep15))
+            if row15 and row15["status"] != "pending":
+                sweep_claimed15 = True
+                break
+            time.sleep(0.1)
+
+        status_sweep15 = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            t15b = client.get(f"/task/{stranded_sweep15}").json()
+            status_sweep15 = t15b.get("status")
+            if status_sweep15 in ("hot", "completed", "failed"):
+                break
+            time.sleep(0.2)
+
+        # Both runs are terminal, so another sweep must find nothing to requeue
+        recoverable_after15 = asyncio.run(mock_db.list_recoverable_lead_tasks())
+        requeued15 = [r["id"] for r in recoverable_after15
+                      if r["id"] in (stranded15, stranded_sweep15)]
+
+        stage(15, "Durability: scans stranded by a dead worker resume (poll + sweep) without duplicating the report",
+              stale15 and bool(recoverable15)
+              and status15 in ("hot", "completed")
+              and sweep_claimed15 and status_sweep15 in ("hot", "completed")
+              and reports_after15 == reports_before15 and not requeued15,
+              f"stale={stale15} recoverable={len(recoverable15)} "
+              f"poll_status={status15} sweep_claimed={sweep_claimed15} "
+              f"sweep_status={status_sweep15} "
+              f"reports={reports_before15}->{reports_after15} "
+              f"requeued={requeued15}")
 
 
 def main() -> int:
