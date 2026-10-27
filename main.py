@@ -13,12 +13,18 @@ from utils import robust_json_parse
 
 # --- LLM Configuration ---
 # Using Groq for speed/cost efficiency. Fallback to OpenAI if needed.
+GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip()
+# The client must be constructible without a key (the API boots, /health says
+# llm_configured=false, and every analysis records an honest
+# "model_unavailable" error instead of the whole process dying at import).
+# Calls made without a key fail server-side; they never fabricate output.
+LLM_CONFIGURED = bool(GROQ_KEY)
 llm = ChatOpenAI(
     # Groq retires model ids; GROQ_MODEL overrides without a code change.
     model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
     temperature=0.1,
     base_url="https://api.groq.com/openai/v1",
-    api_key=os.getenv("GROQ_API_KEY")
+    api_key=GROQ_KEY or "gsk-not-configured"
 )
 
 # --- Rate limiting ----------------------------------------------------------

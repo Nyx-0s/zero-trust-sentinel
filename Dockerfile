@@ -57,6 +57,9 @@ RUN npm install -g @anthropic-ai/claude-code \
 # Application code
 COPY *.py ./
 
+# Vendored founder-skill (MIT) powering /business/* - instructions + tools
+COPY vendor/founder-skill ./vendor/founder-skill
+
 # Harvey's tuned config + skills (read from the working directory)
 COPY harvey.yaml harvey_discovery.md ./
 COPY skills/ ./skills/
@@ -65,6 +68,10 @@ COPY skills/ ./skills/
 # the daily win-back pass - Render has no user crontab)
 COPY worker.sh ./worker.sh
 RUN chmod +x worker.sh
+
+# Migration + verification helpers (documented in docs/ZERO_COST_RUNBOOK.md)
+COPY scripts/ ./scripts/
+RUN chmod +x scripts/*.sh 2>/dev/null || true
 
 # The "Cockpit": self-contained landing page served by the API at /
 COPY static/ ./static/

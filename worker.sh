@@ -60,7 +60,16 @@ win_back_loop() {
 win_back_loop &
 
 log "worker up (engine pid $ENGINE_PID, harvey ${HARVEY_PID:-skipped}) - waiting"
-# If a primary process dies, exit and let Render restart the worker.
+# Wait for the first primary to exit. Docker must be told WHICH exit it was:
+#   engine rc=0  -> sender-health HOLD gate (probe failed, do not mail). We exit
+#                   0 so `restart: on-failure` leaves the container stopped
+#                   instead of re-sending a probe email every interval.
+#   engine rc!=0 -> crash. Exit non-zero so Docker restarts us (crash recovery).
 wait -n "$ENGINE_PID" ${HARVEY_PID:+"$HARVEY_PID"}
-log "a primary process exited - container will restart"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    log "a primary process stopped cleanly (sender-health HOLD gate) - not restarting"
+    exit 0
+fi
+log "a primary process exited with rc=$rc - exiting non-zero so Docker restarts"
 exit 1

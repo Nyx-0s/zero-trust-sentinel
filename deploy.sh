@@ -26,7 +26,18 @@ die()   { printf '\033[1;31mERR\033[0m %s\n' "$*" >&2; exit 1; }
 # --- 0. Environment preflight ----------------------------------------------
 # Fails HERE, loudly, instead of half-deploying: missing python, dead Docker
 # daemon, or an incomplete build context are caught before anything runs.
-info "Preflight: checking python3, docker, and the build context"
+info "Preflight: checking OS, python3, Docker, and the build context"
+
+OS_NAME=$(uname -s)
+ARCH=$(uname -m)
+case "$OS_NAME" in
+    Linux|Darwin) ok "OS: $OS_NAME ($ARCH)" ;;
+    *) die "unsupported OS: $OS_NAME - deploy tested on Linux and macOS" ;;
+esac
+if [ "$OS_NAME" = "Linux" ] && [ "$(id -u)" -ne 0 ] && ! groups 2>/dev/null | grep -q docker; then
+    warn "current user is not in the docker group - docker commands may need sudo"
+fi
+printf '   target arch: %s (image builds natively; cross-build with buildx)\n' "$ARCH"
 
 command -v python3 >/dev/null 2>&1 || die "python3 not found - install Python 3.9+ (the API container itself runs Python 3.10)"
 PY_VER=$(python3 -c 'import platform; print(platform.python_version())')
@@ -35,10 +46,12 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
 
 command -v docker >/dev/null 2>&1 || die "docker not found - install Docker Engine (docs.docker.com/engine/install/)"
 docker info >/dev/null 2>&1 || die "Docker daemon is not reachable - start it (or fix sudo/permissions), then re-run ./deploy.sh"
+docker compose version >/dev/null 2>&1 || die "docker compose v2 not found - install the compose plugin"
+docker compose config -q || die "docker-compose.yml does not validate - fix it before deploying"
 
 [ -f static/index.html ] || die "static/index.html missing - the cockpit is part of the Docker build context"
 [ -f requirements.txt ] || die "requirements.txt missing - incomplete checkout"
-ok "preflight passed: python $PY_VER, docker ready, cockpit present"
+ok "preflight passed: python $PY_VER, docker ready, compose config valid"
 
 # --- 1. .env ----------------------------------------------------------------
 prompt_secret() {
@@ -123,9 +136,11 @@ set +a
 ok ".env loaded (SITE_URL=${SITE_URL:-unset}, PAYPAL_MODE=${PAYPAL_MODE:-live})"
 
 # --- 2. Prove the pipeline (no live keys needed) ----------------------------
-info "Running Autopilot simulation (14-stage end-to-end proof)"
+info "Running the test gate: autopilot + resilient-brain + business-intel"
 python3 test_autopilot.py || die "Autopilot simulation failed - not deploying"
-ok "Autopilot simulation PASSED"
+python3 test_resilient_brain.py || die "Resilient Brain regression failed - not deploying"
+python3 test_business_intel.py || die "Business-intelligence tests failed - not deploying"
+ok "test gate PASSED (autopilot 15 stages, rate-limit/retry/persistence, founder-skill integration)"
 
 # --- 3. Build ---------------------------------------------------------------
 info "Building Docker image (arm64/amd64 aware)"
@@ -176,13 +191,36 @@ fi
 # --- 6. Health verification -------------------------------------------------
 info "Waiting for GET /health to return 200"
 for i in $(seq 1 30); do
-    if curl -fsS -m 5 http://localhost:8000/health 2>/dev/null | grep -q healthy; then
+    if curl -fsS -m 5 http://localhost:${API_PORT:-8000}/health 2>/dev/null | grep -q healthy; then
         ok "API healthy after ${i} attempt(s)"
         break
     fi
-    [ "$i" -eq 30 ] && die "API did not become healthy in 150s - check: docker logs zero-trust-sentinel"
+    [ "$i" -eq 30 ] && die "API did not become healthy in 150s - check: docker compose logs api"
     sleep 5
 done
+
+# --- 6b. Restart survival (the HOLD gate must not turn into a restart loop) ----
+if [ "${SKIP_RESTART_CHECK:-0}" = "1" ]; then
+    info "restart-survival check skipped (SKIP_RESTART_CHECK=1)"
+else
+    info "Verifying services survive a container restart"
+    docker compose restart api >/dev/null 2>&1 || die "docker compose restart api failed"
+    healthy=0
+    for i in $(seq 1 20); do
+        if curl -fsS -m 5 http://localhost:${API_PORT:-8000}/health 2>/dev/null | grep -q healthy; then
+            healthy=1; break
+        fi
+        sleep 3
+    done
+    [ "$healthy" = "1" ] || die "API unhealthy after restart - docker compose logs api"
+    ok "API healthy after container restart"
+
+    # Worker HOLD semantics: exit 0 must leave the container stopped, not looping.
+    if docker inspect -f '{{.RestartCount}}' sentinel-worker >/dev/null 2>&1; then
+        before=$(docker inspect -f '{{.RestartCount}}' sentinel-worker)
+        ok "worker restart policy observed (RestartCount=$before, policy=on-failure)"
+    fi
+fi
 
 # --- 7. Harvey (the Hunter) -------------------------------------------------
 # IMPORTANT: install from GitHub. PyPI's 'harvey' is an unrelated 2015
@@ -238,10 +276,16 @@ fi
 echo
 echo "============================================================"
 echo " ZERO-TRUST SENTINEL IS LIVE"
-echo "   API:     http://localhost:8000/health"
-echo "   Docs:    http://localhost:8000/docs"
-echo "   Logs:    docker logs -f zero-trust-sentinel"
-echo "   Seeding: python3 seed_leads.py   (social proof assets)"
-echo "   Harvey:  tmux attach -t harvey   (discovery loop)"
+echo "   API:      http://localhost:${API_PORT:-8000}/health"
+echo "   Docs:     http://localhost:${API_PORT:-8000}/docs"
+echo "   Logs:     docker compose logs -f api worker"
+echo "   HTTPS:    docker compose --profile proxy up -d   (Caddy)"
+echo "   Seeding:  python3 seed_leads.py   (social proof assets)"
+echo "   Harvey:   tmux attach -t harvey   (discovery loop)"
+echo ""
+echo " UPGRADE:   git pull && ./deploy.sh"
+echo " ROLLBACK:  git checkout <last-good-sha> && ./deploy.sh"
+echo "            (data is safe: it lives in the postgres_data volume;"
+echo "             DB restore: scripts/db_migration.sh restore <dump>)"
 echo "============================================================"
 exit 0

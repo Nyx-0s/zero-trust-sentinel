@@ -15,6 +15,12 @@ engine_pg.txt
 voice_out*.txt
 diag*.txt
 
+# Business-intelligence per-project scratch (generated, never committed)
+business_work/
+
+# Database dumps (contain production rows - never commit)
+backups/
+
 # Python
 __pycache__/
 *.pyc

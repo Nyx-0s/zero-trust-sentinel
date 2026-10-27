@@ -5,6 +5,12 @@ from datetime import datetime
 
 import httpx
 
+from dotenv import load_dotenv
+
+# Read .env before any module-level os.getenv below. Real environment
+# variables always win over the file.
+load_dotenv()
+
 from db import (
     get_inbound_leads,
     get_latest_report_by_domain,

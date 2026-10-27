@@ -1,38 +1,106 @@
-# Zero-Trust Sentinel - One-Click deployment (Oracle Cloud Free Tier + Neon Postgres)
+# Zero-Trust Sentinel - zero-cost deployment stack
+# (Oracle Cloud Always Free VM, or any Docker host)
 #
-# Uses an external Neon Postgres (DATABASE_URL) - no local database service.
-# All variables below are read from the .env file in this directory.
+#   docker compose up -d --build          # api + worker + database
+#   docker compose --profile proxy up -d  # + Caddy with automatic HTTPS
+#
+# Services and restart semantics - these matter:
+#
+#   db       restart: unless-stopped   a database should always come back
+#   api      restart: unless-stopped   crash = restart; no intentional exits
+#   worker   restart: on-failure       the outbound engine's sender-health
+#                                      HOLD gate exits 0 on purpose. Docker's
+#                                      always/unless-stopped would restart it
+#                                      and re-send probe emails every interval;
+#                                      on-failure reproduces the original
+#                                      supervisor rule (restart ONLY after a
+#                                      crash), so a HOLD stays held.
+#   caddy    restart: unless-stopped   (profile: proxy)
+#
+# DATABASE_URL comes from .env and wins: point it at this file's `db` service
+# for a fully local database, or at an external free Postgres to skip `db`
+# (then start only: docker compose up -d api worker).
 services:
-  sentinel:
-    build: .
-    container_name: zero-trust-sentinel
-    restart: always
-    ports:
-      - "8000:8000"
+  db:
+    image: postgres:16-alpine
+    container_name: sentinel-db
+    restart: unless-stopped
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
-      - RESEND_API_KEY=${RESEND_API_KEY:-}
-      - DATABASE_URL=${DATABASE_URL}
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
-      - PRICE_ID_MONTHLY=${PRICE_ID_MONTHLY:-}
-      - FROM_EMAIL=${FROM_EMAIL}
-      - MAX_EMAILS_PER_DAY=${MAX_EMAILS_PER_DAY:-20}
-      # Outbound pacing (Black October window: 30-60s jitter, cap 40/day)
-      - JITTER_MIN_SECONDS=${JITTER_MIN_SECONDS:-60}
-      - JITTER_MAX_SECONDS=${JITTER_MAX_SECONDS:-120}
-      # Payments (India-based merchant): PayPal Native Button + Subscriptions API
-      # PAYPAL_MODE=sandbox -> api-m.sandbox.paypal.com, live -> api-m.paypal.com
-      - PAYPAL_MODE=${PAYPAL_MODE:-live}
-      - PAYPAL_API_BASE=${PAYPAL_API_BASE:-}
-      - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID:-}
-      - PAYPAL_SECRET=${PAYPAL_SECRET:-}
-      - PAYPAL_PLAN_ID=${PAYPAL_PLAN_ID:-}
-      - PAYPAL_WEBHOOK_ID=${PAYPAL_WEBHOOK_ID:-}
-      - AIRTM_PAYMENT_LINK=${AIRTM_PAYMENT_LINK:-}
-      # Public URL of the API (success/cancel URLs) + cockpit CORS allow-list
-      - SITE_URL=${SITE_URL:-}
-      - FRONTEND_ORIGINS=${FRONTEND_ORIGINS:-}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinel} -d ${POSTGRES_DB:-sentinel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  api:
+    build: .
+    container_name: sentinel-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Compose interpolates from .env, so one file configures both sides.
+      # sslmode=disable: TLS inside the private compose network is pointless
+      # and PostgreSQL rejects the upgrade by default (asyncpg sslmode=prefer).
+      DATABASE_URL: ${DATABASE_URL:-postgresql://sentinel:sentinel@db:5432/sentinel?sslmode=disable}
+      PORT: "8000"
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     volumes:
       - ./reports:/reports
+      - ./business_work:/app/business_work
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health | grep -q healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build: .
+    container_name: sentinel-worker
+    # HOLD gate protection: exit code 0 = intentional stop, never restarted.
+    restart: on-failure
+    command: ["bash", "worker.sh"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://sentinel:sentinel@db:5432/sentinel?sslmode=disable}
+    volumes:
+      - ./reports:/reports
+      - ./business_work:/app/business_work
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: sentinel-caddy
+    profiles: ["proxy"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_SITE_URL: ${CADDY_SITE_URL:-https://zerodaysentinel.xo.je}
+      CADDY_UPSTREAM: ${CADDY_UPSTREAM:-http://api:8000}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
