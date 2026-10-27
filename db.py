@@ -188,6 +188,32 @@ async def init_db() -> None:
         )""")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trajectories_client_id ON trajectories(client_id)")
 
+        # Business intelligence projects + their per-skill outputs
+        # (founder-skill integration; additive only - no existing table touched)
+        await conn.execute("""CREATE TABLE IF NOT EXISTS business_projects (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            context JSONB NOT NULL DEFAULT '{}'::jsonb,
+            status VARCHAR(50) DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )""")
+        await conn.execute("""CREATE TABLE IF NOT EXISTS business_outputs (
+            id SERIAL PRIMARY KEY,
+            project_id INTEGER NOT NULL REFERENCES business_projects(id) ON DELETE CASCADE,
+            skill_id VARCHAR(64) NOT NULL,
+            status VARCHAR(50) DEFAULT 'pending',
+            kind VARCHAR(32),
+            content TEXT,
+            output JSONB,
+            error TEXT,
+            meta JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(project_id, skill_id)
+        )""")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_business_outputs_project ON business_outputs(project_id)")
+
 
 async def create_client(domain: str, email: str = "", name: str = "") -> int:
     """Create a new client record. Returns the client ID."""
@@ -806,3 +832,105 @@ async def get_lead_signals(domain: str) -> List[str]:
 async def get_client(client_id: int) -> Optional[Dict[str, Any]]:
     """Get client record by ID (alias for get_client_by_id)."""
     return await get_client_by_id(client_id)
+
+
+# ---------------------------------------------------------------------------
+# Business intelligence (founder-skill integration)
+# ---------------------------------------------------------------------------
+
+async def create_business_project(name: str,
+                                  context: Optional[Dict[str, Any]] = None) -> int:
+    """Create a business-analysis project. Returns the project id."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO business_projects (name, context) "
+            "VALUES ($1, $2) RETURNING id",
+            name, json.dumps(context or {}),
+        )
+        return row["id"] if row else 0
+
+
+async def list_business_projects() -> List[Dict[str, Any]]:
+    """All business projects with a status count per project."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT p.id, p.name, p.status, p.created_at, p.updated_at,
+                      count(o.id) FILTER (WHERE o.status = 'complete') AS complete,
+                      count(o.id) FILTER (WHERE o.status = 'failed') AS failed,
+                      count(o.id) AS outputs
+               FROM business_projects p
+               LEFT JOIN business_outputs o ON o.project_id = p.id
+               GROUP BY p.id ORDER BY p.id DESC"""
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_business_project(project_id: int) -> Optional[Dict[str, Any]]:
+    """One business project with its context."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name, context, status, created_at, updated_at "
+            "FROM business_projects WHERE id = $1", project_id)
+        return dict(row) if row else None
+
+
+async def update_business_project_context(project_id: int,
+                                          context: Dict[str, Any]) -> None:
+    """Replace a project's business context."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE business_projects SET context = $1, updated_at = NOW() "
+            "WHERE id = $2", json.dumps(context or {}), project_id)
+
+
+async def save_business_output(project_id: int, skill_id: str, status: str,
+                               kind: str = "", content: str = "",
+                               output: Optional[Dict[str, Any]] = None,
+                               error: Optional[str] = None,
+                               meta: Optional[Dict[str, Any]] = None) -> None:
+    """Upsert the latest result of one skill for one project."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO business_outputs
+                   (project_id, skill_id, status, kind, content, output, error, meta)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (project_id, skill_id) DO UPDATE SET
+                   status = EXCLUDED.status,
+                   kind = EXCLUDED.kind,
+                   content = EXCLUDED.content,
+                   output = EXCLUDED.output,
+                   error = EXCLUDED.error,
+                   meta = EXCLUDED.meta,
+                   updated_at = NOW()""",
+            project_id, skill_id, status, kind, content,
+            json.dumps(output or {}), error, json.dumps(meta or {}),
+        )
+
+
+async def get_business_outputs(project_id: int) -> List[Dict[str, Any]]:
+    """Every recorded skill output for a project (status/error, no bulk body)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT skill_id, status, kind, error, meta, updated_at,
+                      length(content) AS content_length
+               FROM business_outputs WHERE project_id = $1 ORDER BY id""",
+            project_id)
+        return [dict(r) for r in rows]
+
+
+async def get_business_output(project_id: int,
+                              skill_id: str) -> Optional[Dict[str, Any]]:
+    """One skill's full output document."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT project_id, skill_id, status, kind, content, output, "
+            "error, meta, created_at, updated_at FROM business_outputs "
+            "WHERE project_id = $1 AND skill_id = $2", project_id, skill_id)
+        return dict(row) if row else None

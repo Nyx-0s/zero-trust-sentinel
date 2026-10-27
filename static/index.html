@@ -52,6 +52,7 @@
                     <a href="threat-center/readiness.html"><strong>Readiness Checklist</strong><span>What to verify today</span></a>
                 </div>
             </details>
+            <a href="#business">Business Intel</a>
             <a href="chaos.html">Chaos</a>
             <a href="crew.html">Crew</a>
             <a href="pricing.html">Pricing</a>
@@ -383,6 +384,55 @@
         <div class="btn-row">
             <a class="btn btn-primary btn-lg" href="pricing.html">See full pricing</a>
             <a class="btn btn-secondary btn-lg" href="#scan-section">Run a free assessment first</a>
+        </div>
+    </div>
+</section>
+
+<!-- ======================= BUSINESS INTELLIGENCE ======================= -->
+<section class="section section-alt" id="business">
+    <div class="container">
+        <div class="section-head center">
+            <span class="eyebrow">Business intelligence</span>
+            <h2>Eleven founder skills, pointed at your business</h2>
+            <p class="lead muted">Board review, competitor mapping, buyer panel, pricing, unit economics, marketing, brand, operations, launch and a compiled plan. Every result is labelled: <strong>deterministic</strong> (computed locally, no model), <strong>AI-generated</strong> (written by our Groq model from your context), or <strong>research required</strong> (it will not run without sources you supply).</p>
+        </div>
+
+        <div class="card" style="max-width:960px;margin:0 auto;">
+            <div id="biz-loading" class="muted small">Loading business intelligence…</div>
+            <div id="biz-error" class="callout warn" style="display:none;"></div>
+
+            <div id="biz-projects-wrap" style="display:none;">
+                <h3>Projects</h3>
+                <div id="biz-projects" class="grid" style="gap:.5rem;"></div>
+                <div class="scan-input" style="margin-top:.8rem;">
+                    <input type="text" id="biz-new-name" placeholder="New project name" autocomplete="off">
+                    <button class="btn btn-secondary" onclick="bizCreate()">Create project</button>
+                    <button class="btn btn-primary" onclick="bizCreateFromTemplate()">Start from Sentinel template</button>
+                </div>
+            </div>
+
+            <div id="biz-workspace" style="display:none;margin-top:1.2rem;">
+                <h3 id="biz-project-title"></h3>
+                <p class="small muted">Business context (JSON). Skills read exactly this — nothing is invented beyond it.</p>
+                <textarea id="biz-context" rows="7" style="width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85rem;border:1px solid var(--line);border-radius:8px;padding:.7rem;background:var(--surface,#fff);color:inherit;"></textarea>
+                <div class="btn-row" style="margin:.5rem 0 1rem;">
+                    <button class="btn btn-secondary" onclick="bizSaveContext()">Save context</button>
+                    <button class="btn btn-primary" onclick="bizRunWorkflow()">Run full workflow (11 skills)</button>
+                </div>
+
+                <div id="biz-skills" class="grid" style="gap:.5rem;"></div>
+                <div id="biz-status" class="small muted" style="margin-top:.6rem;">Pick a skill to run it on its own.</div>
+
+                <div id="biz-output-wrap" style="display:none;margin-top:1rem;">
+                    <div class="panel-title" id="biz-output-title">Output</div>
+                    <div id="biz-output-meta" class="small muted"></div>
+                    <pre id="biz-output" style="white-space:pre-wrap;word-break:break-word;max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:.9rem;background:var(--surface,#fff);font-size:.82rem;"></pre>
+                    <div class="btn-row" style="margin-top:.6rem;">
+                        <button class="btn btn-secondary" onclick="bizDownload()">Download</button>
+                        <button class="btn btn-ghost" onclick="bizRerun()">Rerun this skill</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </section>
@@ -992,5 +1042,6 @@
         document.body.appendChild(script);
     }
 </script>
+<script src="assets/js/business.js?v=2"></script>
 </body>
 </html>

@@ -25,6 +25,13 @@ import httpx
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
+
+# Load .env BEFORE `from main import run_scan`: main.py builds the Groq client
+# at import time and raises OpenAIError if GROQ_API_KEY is absent. Existing
+# process environment (Replit/production secrets) is never overridden.
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,8 +79,16 @@ from db import (
     claim_lead_task,
     is_lead_task_stale,
     list_recoverable_lead_tasks,
+    create_business_project,
+    list_business_projects,
+    get_business_project,
+    update_business_project_context,
+    save_business_output,
+    get_business_outputs,
+    get_business_output,
 )
 from utils import is_valid_domain, sanitize_domain
+import business_intel as business
 
 # Initialize Stripe with your secret key
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
@@ -147,12 +162,6 @@ def _coerce_client_id(raw: Any) -> Optional[int]:
         return int(raw)
     except (TypeError, ValueError):
         return None
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup."""
-    await init_db()
 
 
 @app.post("/scan")
@@ -1213,17 +1222,192 @@ async def get_digital_twin(client_id: str) -> Dict[str, Any]:
             "created_at": saved["created_at"], **(saved.get("payload") or {})}
 
 
+# -----------------------------------------------------------------------------
+# Business intelligence (founder-skill integration, vendor/founder-skill MIT)
+# -----------------------------------------------------------------------------
+
+class BusinessProjectRequest(BaseModel):
+    """Create a business-analysis project."""
+    name: str
+    context: Optional[Dict[str, Any]] = None
+
+
+class BusinessContextRequest(BaseModel):
+    """Replace a project's business context."""
+    context: Dict[str, Any]
+
+
+class BusinessRunRequest(BaseModel):
+    """Run one skill, or the whole workflow when skill_id is 'workflow'."""
+    skill_id: Optional[str] = None
+    inputs: Optional[Dict[str, Any]] = None
+    inputs_by_skill: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+@app.get("/business/context-template")
+async def business_context_template() -> Dict[str, Any]:
+    """Preconfigured Sentinel business context (repository facts only)."""
+    return business.SENTINEL_CONTEXT_TEMPLATE
+
+
+@app.get("/business/skills")
+async def business_skills() -> Dict[str, Any]:
+    """Skill registry: ids, kinds and workflow order. No file system paths."""
+    return {
+        "skills": business.get_registry(),
+        "workflow": business.WORKFLOW_ORDER,
+        "vendor": "founder-skill (MIT), vendored at vendor/founder-skill",
+        "fingerprint": business.context_fingerprint(business.SENTINEL_CONTEXT_TEMPLATE),
+    }
+
+
+@app.post("/business/projects")
+async def business_create_project(request: BusinessProjectRequest) -> Any:
+    name = (request.name or "").strip()
+    if not name or len(name) > 200:
+        return JSONResponse(status_code=400,
+                            content={"error": "name must be 1-200 characters"})
+    context = request.context or {}
+    try:
+        business._check_size(context, business.MAX_CONTEXT_BYTES, "context")
+    except business.SkillInputError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    project_id = await create_business_project(name, context)
+    return await get_business_project(project_id)
+
+
+@app.get("/business/projects")
+async def business_list_projects() -> Dict[str, Any]:
+    return {"projects": await list_business_projects()}
+
+
+@app.get("/business/projects/{project_id}")
+async def business_get_project(project_id: int) -> Any:
+    project = await get_business_project(project_id)
+    if not project:
+        return JSONResponse(status_code=404, content={"error": "no such project"})
+    outputs = await get_business_outputs(project_id)
+    return {**project, "outputs": outputs}
+
+
+@app.post("/business/projects/{project_id}/context")
+async def business_update_context(project_id: int,
+                                  request: BusinessContextRequest) -> Any:
+    if not await get_business_project(project_id):
+        return JSONResponse(status_code=404, content={"error": "no such project"})
+    try:
+        business._check_size(request.context, business.MAX_CONTEXT_BYTES, "context")
+    except business.SkillInputError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    await update_business_project_context(project_id, request.context)
+    return await get_business_project(project_id)
+
+
+async def _business_prior(project_id: int) -> List[Dict[str, Any]]:
+    """Completed outputs, full text, for skills that read earlier skills."""
+    rows = await get_business_outputs(project_id)
+    prior: List[Dict[str, Any]] = []
+    for row in rows:
+        if row.get("status") != "complete":
+            continue
+        full = await get_business_output(project_id, row["skill_id"])
+        if full and full.get("content"):
+            prior.append({"skill_id": row["skill_id"],
+                          "content": full["content"], "status": "complete"})
+    return prior
+
+
+async def _business_run_one(project: Dict[str, Any], skill_id: str,
+                            inputs: Dict[str, Any]) -> None:
+    """Execute one skill and persist its outcome (never raise into the task)."""
+    project_id = project["id"]
+    try:
+        prior = await _business_prior(project_id)
+        result = await business.run_skill(
+            project_id, skill_id, project.get("context") or {}, inputs, prior)
+    except Exception as exc:  # noqa: BLE001 - persistence over crash
+        result = {
+            "kind": business.SKILLS[skill_id]["kind"], "status": "failed",
+            "content": "", "output": {},
+            "error": f"{type(exc).__name__}: {exc}", "meta": {},
+        }
+    await save_business_output(
+        project_id, skill_id, result.get("status", "failed"),
+        result.get("kind", ""), result.get("content") or "",
+        result.get("output") or {}, result.get("error"),
+        dict(result.get("meta") or {},
+             context_fingerprint=business.context_fingerprint(
+                 project.get("context") or {})),
+    )
+
+
+async def _business_run_workflow(project: Dict[str, Any],
+                                 inputs_by_skill: Dict[str, Dict[str, Any]]) -> None:
+    """All eleven skills in upstream order; one failure never stops the rest."""
+    for skill_id in business.WORKFLOW_ORDER:
+        await _business_run_one(project, skill_id,
+                                (inputs_by_skill or {}).get(skill_id, {}))
+
+
+@app.post("/business/projects/{project_id}/run")
+async def business_run(project_id: int, request: BusinessRunRequest) -> Any:
+    project = await get_business_project(project_id)
+    if not project:
+        return JSONResponse(status_code=404, content={"error": "no such project"})
+    scope = (request.skill_id or "workflow").strip()
+    inputs = request.inputs or {}
+    if not isinstance(inputs, dict):
+        return JSONResponse(status_code=400, content={"error": "inputs must be an object"})
+
+    if scope != "workflow":
+        try:
+            spec = business.validate_skill_id(scope)
+        except business.SkillInputError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        await save_business_output(project_id, scope, "running", spec["kind"],
+                                   "", {}, None, {})
+        asyncio.create_task(_business_run_one(project, scope, inputs))
+        return {"status": "running", "scope": scope, "skill_id": scope}
+
+    for skill_id in business.WORKFLOW_ORDER:
+        await save_business_output(project_id, skill_id, "pending",
+                                   business.SKILLS[skill_id]["kind"],
+                                   "", {}, None, {})
+    asyncio.create_task(_business_run_workflow(project, request.inputs_by_skill or {}))
+    return {"status": "running", "scope": "workflow",
+            "skills": business.WORKFLOW_ORDER}
+
+
+@app.get("/business/projects/{project_id}/outputs/{skill_id}")
+async def business_get_output(project_id: int, skill_id: str) -> Any:
+    try:
+        business.validate_skill_id(skill_id)
+    except business.SkillInputError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    output = await get_business_output(project_id, skill_id)
+    if not output:
+        return JSONResponse(status_code=404, content={"error": "no output yet"})
+    return output
+
+
 @app.get("/health")
-async def health_check() -> Dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "healthy", "service": "zero-trust-sentinel"}
+async def health_check() -> Dict[str, Any]:
+    """Health check: process liveness plus whether the LLM is configured."""
+    from main import LLM_CONFIGURED
+    return {"status": "healthy", "service": "zero-trust-sentinel",
+            "llm_configured": bool(LLM_CONFIGURED)}
 
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Any, exc: Exception) -> JSONResponse:
+    # Never echo internals (DSNs, keys, stack text) to the browser - the
+    # traceback belongs in the server log.
+    import traceback
+    traceback.print_exc()
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc), "service": "zero-trust-sentinel"},
+        content={"detail": f"internal error ({type(exc).__name__})",
+                 "service": "zero-trust-sentinel"},
     )
 
 
