@@ -49,6 +49,32 @@ else
     HARVEY_PID=$!
 fi
 
+# --- 2b. The Brain (Groq): hunter discovery loop ----------------------------
+# hunter.py does harvey's job without the Claude/Anthropic CLI, so lead
+# discovery runs HERE, on the server - no laptop, no ANTHROPIC_API_KEY.
+# Gated exactly like harvey: a missing key or an empty target list logs why
+# and skips, and it never takes the worker down.
+if [ "${SKIP_HUNTER:-0}" = "1" ]; then
+    log "SKIP_HUNTER=1 - hunter discovery disabled"
+elif [ -z "${GROQ_API_KEY:-}" ]; then
+    log "GROQ_API_KEY not set - hunter discovery skipped"
+elif [ ! -s marketing/seed_leads.csv ]; then
+    log "marketing/seed_leads.csv missing or empty - hunter discovery skipped"
+else
+    hunter_loop() {
+        while true; do
+            log "running hunter discovery pass"
+            python hunter.py --api "${SITE_URL:-https://zerodaysentinel.xo.je}" \
+                --limit "${HUNTER_LIMIT:-10}" >> hunter.log 2>&1 \
+                || log "hunter pass failed (retrying after the interval)"
+            sleep "${HUNTER_INTERVAL_SECONDS:-21600}"
+        done
+    }
+    hunter_loop &
+    HUNTER_PID=$!
+    log "hunter discovery loop started (pid $HUNTER_PID, every ${HUNTER_INTERVAL_SECONDS:-21600}s)"
+fi
+
 # --- 3. Daily win-back pass -------------------------------------------------
 win_back_loop() {
     while true; do

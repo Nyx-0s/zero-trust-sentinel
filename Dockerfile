@@ -71,6 +71,9 @@ RUN chmod +x worker.sh
 
 # Migration + verification helpers (documented in docs/ZERO_COST_RUNBOOK.md)
 COPY scripts/ ./scripts/
+
+# hunter.py's target list - the worker's discovery loop reads it on every pass
+COPY marketing/ ./marketing/
 RUN chmod +x scripts/*.sh 2>/dev/null || true
 
 # The "Cockpit": self-contained landing page served by the API at /

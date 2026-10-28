@@ -1,4 +1,4 @@
-# Zero-Trust Sentinel — zero-cost hosting runbook (Replit exit)
+# Zero-Trust Sentinel — zero-cost hosting runbook (self-hosted VM, the alternative to the Vercel Body)
 
 Target: **Oracle Cloud Always Free VM**, Docker Engine, local PostgreSQL,
 Caddy for HTTPS, existing domain `zerodaysentinel.xo.je`. Zero recurring
@@ -41,7 +41,23 @@ current. Capacity for free shapes is also not guaranteed in every region.
    Network → Security Lists → Add Ingress Rules): TCP 22 (your IP only),
    TCP 80, TCP 443.
 
-## 2. First-time server setup (paste as root/sudo)
+## 2. First-time server setup
+
+**One command from your Mac (preferred):**
+
+```bash
+./deploy/oracle_deploy.sh ubuntu@YOUR_VM_IP ~/path/to/your-key.pem
+```
+
+That script ships the working tree (no `.git`, no `.venv`, no data), installs
+Docker if the VM is bare, writes `/opt/zero-trust-sentinel/.env` from your local
+`.env` with `DATABASE_URL` forced onto the compose `db` service, opens 80/443
+when a host firewall is present, brings up `api + db + worker + caddy`, waits for
+`/health`, proves restart survival, confirms the HOLD gate is not restart-looping,
+and installs a nightly `pg_dump` cron (14 days retained). Re-running is safe;
+`FORCE_ENV=1` rewrites the server `.env` from your local copy.
+
+**Manual fallback (paste as root/sudo):**
 
 ```bash
 apt-get update && apt-get install -y git curl ufw
@@ -76,7 +92,7 @@ What `deploy.sh` does, in order (all steps are in the script):
    **`docker compose config -q`** (compose must validate before anything runs).
 2. `.env` creation if missing — values are entered with hidden input and are
    never echoed back.
-3. **Test gate:** `test_autopilot.py` (15 stages) + `test_resilient_brain.py`
+3. **Test gate:** `test_autopilot.py` (17 stages) + `test_resilient_brain.py`
    (rate limiter, 429 retry, failure persistence) + `test_business_intel.py`
    (founder-skill integration). A red suite stops the deploy.
 4. `docker build` for the host architecture.
@@ -97,8 +113,9 @@ docker compose --profile proxy up -d
 
 - outbound engine exits **0** = sender-health HOLD (probe failed) → the
   container **stays stopped**. `restart: always/unless-stopped` would restart
-  it on 0 and re-send probe emails every interval — the exact failure
-  `replit_run.sh`'s supervisor was written to prevent.
+  it on 0 and re-send probe emails every interval — the exact failure the old
+  Replit supervisor (`replit_run.sh`, removed with the Replit exit) was
+  written to prevent.
 - non-zero exit = crash → Docker restarts it (crash recovery).
 - `worker.sh` already supervises the outbound engine, the harvey discovery
   loop and the daily win-back pass — never start a second copy.
@@ -112,8 +129,10 @@ zone cannot publish Resend's TXT DKIM/SPF). Then
 ## 5. DNS for `zerodaysentinel.xo.je`
 
 Current state: the domain is a **static InfinityFree site (the "Face")**
-whose JS points API calls at the Replit deployment (`DEFAULT_API` in
-`static/index.html`). Cutover plan:
+whose JS points API calls at the Vercel Body (`DEFAULT_API` in
+`static/index.html` = `https://zero-trust-sentinel-opal.vercel.app`). The old
+Replit deployment is gone. This VM path is an *alternative* to Vercel — the
+cutover steps below assume you are moving the API here:
 
 1. **[YOU]** At your DNS provider for `xo.je`, add:
    - `A  zerodaysentinel.xo.je  →  <VM public IP>`
@@ -125,9 +144,9 @@ whose JS points API calls at the Replit deployment (`DEFAULT_API` in
 4. Only after HTTPS is green, retire the InfinityFree page (keep the files —
    they are `static/` in this repo, served by the API now).
 5. With the API on the same origin as the page, `API_BASE` in
-   `static/index.html` falls back to `window.location.origin` and the Replit
-   URL becomes dead — **that is the Replit exit**; cancel/delete the Replit
-   deployment once traffic is verified.
+   `static/index.html` falls back to `window.location.origin` — then update
+   `DEFAULT_API` and the `SITE_URL` env var (which feeds the email links) to
+   whichever origin you keep, and retire the Vercel deployment.
 
 ## 6. Backups (data lives in the `postgres_data` volume)
 
@@ -144,12 +163,12 @@ Off-site copy (optional, free): `rclone copy backups remote:sentinel-backups`
 with any free-tier object store. Restore drill: `scripts/db_migration.sh
 rollback backups/<file>.dump`.
 
-## 7. Migration cutover (Replit/old DB → new VM DB)
+## 7. Migration cutover (old/managed DB → new VM DB)
 
 ```bash
 # 1. dump the source (run with the OLD DATABASE_URL in .env)
 scripts/db_migration.sh dump source.dump
-# 2. stop writers on the old side (stop the Replit process / docker compose stop api worker)
+# 2. stop writers on the old side (stop the API process / docker compose stop api worker)
 # 3. final dump
 scripts/db_migration.sh dump final.dump
 # 4. on the new VM: point DATABASE_URL at the local db service, then

@@ -15,6 +15,7 @@ Run:  python test_business_intel.py
 
 import asyncio
 import json
+import shutil
 import subprocess
 import sys
 import unittest
@@ -110,6 +111,16 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaises(bi.SkillInputError):
             run(bi.run_skill(PANEL_PID, "founder-cfo", {},
                              {"numbers": {"pad": "x" * (bi.MAX_INPUT_BYTES + 100)}}))
+
+
+def setUpModule():
+    # The tests in this module chain deliberately (init -> save -> tally ->
+    # pricing -> plan), so they must share one run, but never two runs:
+    # panel answers left on disk from a previous run would make the
+    # "no answers yet" honesty check pass for the wrong reason.
+    for pid in (PANEL_PID, PRICING_PID, WORKFLOW_PID,
+                910010, 910011, 910012, 910020, 910021, 910022):
+        shutil.rmtree(bi.workdir_for(pid), ignore_errors=True)
 
 
 class DeterministicToolTests(unittest.TestCase):

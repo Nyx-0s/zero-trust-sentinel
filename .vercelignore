@@ -1,0 +1,22 @@
+# Never upload secrets or local-only state to Vercel.
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.pyc
+.git
+backups
+reports
+*.log
+docker_build.log
+docker_build2.log
+engine_state.txt
+.DS_Store
+
+# Container/other-host manifests confuse Vercel's framework detection
+# (it refuses to build when it sees both FastAPI and "Container").
+Dockerfile
+docker-compose.yml
+render.yaml

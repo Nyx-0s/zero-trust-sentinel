@@ -532,7 +532,7 @@
     // from the Face, every API call must target the Body instead of origin,
     // otherwise a visitor's scan dies on the host that has no API.
     const FACE_HOSTS = ['zerodaysentinel.xo.je', 'www.zerodaysentinel.xo.je'];
-    const DEFAULT_API = 'https://zero-trust-sentinel--onthecontraryan.replit.app';
+    const DEFAULT_API = 'https://zero-trust-sentinel-opal.vercel.app';
     const API_BASE = new URLSearchParams(window.location.search).get('api')
         || (FACE_HOSTS.includes(window.location.hostname) ? DEFAULT_API
             : window.location.origin);
@@ -581,12 +581,36 @@
     }
     function saveGate(g) { localStorage.setItem(GATE_KEY, JSON.stringify(g)); }
     function gateVerdict(domain) {
+        // Local storage may only say two things: whether this domain has had
+        // its free scan, and whether monitoring is on. Paid credits are NEVER
+        // decided here - anyone can edit localStorage - they come from the API
+        // (fetchCredits/consumeCredit below).
         const g = loadGate();
         if (!g.domains[domain]) return 'free';      // first scan of this domain
         if (g.monitoring) return 'full';            // subscribers never pay per score
-        if (g.report_credits > 0) return 'report';  // $9.99 full-report unlock
-        if (g.credits > 0) return 'score';          // $1.99 score unlock
         return 'locked';                            // free tier downgraded
+    }
+    async function fetchCredits(domain) {
+        try {
+            const res = await fetch(`${API_BASE}/unlock/credits?domain=${encodeURIComponent(domain)}`);
+            if (!res.ok) return null;
+            const out = await res.json();
+            return out.credits || null;
+        } catch (e) {
+            return null;   // API unreachable = no credit, never a free pass
+        }
+    }
+    async function consumeCredit(domain, kind) {
+        try {
+            const res = await fetch(`${API_BASE}/unlock/consume`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain, kind })
+            });
+            return res.ok;
+        } catch (e) {
+            return false;
+        }
     }
     function showLockCard(domain) {
         document.getElementById('scan-section').style.display = 'none';
@@ -607,6 +631,10 @@
     function backToScan() {
         document.getElementById('score-lock').style.display = 'none';
         document.getElementById('scan-section').style.display = 'block';
+        // A finished run leaves the button disabled (only the failure paths
+        // re-enable it), so returning to the form must not hand back a dead
+        // "Run Assessment" button.
+        document.getElementById('scan-btn').disabled = false;
     }
 
     async function startScan() {
@@ -616,14 +644,23 @@
         if (!domain) return alert('Please enter a domain.');
 
         // Free-first gate: second look at the same domain is behind the paywall.
-        const verdict = gateVerdict(domain);
+        let verdict = gateVerdict(domain);
+        if (verdict === 'locked') {
+            // Paid credits live on the server, because that is where they were
+            // paid for. A hand-edited localStorage balance buys nothing here.
+            const credits = await fetchCredits(domain);
+            if (credits && credits.report > 0) verdict = 'report';
+            else if (credits && credits.score > 0) verdict = 'score';
+        }
         if (verdict === 'locked') { showLockCard(domain); return; }
         if (!email) return alert('Please enter your work email - it is where the report goes.');
 
-        // Spend the matching unlock (if any) for this run.
-        const gateState = loadGate();
-        if (verdict === 'score') { gateState.credits -= 1; saveGate(gateState); }
-        if (verdict === 'report') { gateState.report_credits -= 1; saveGate(gateState); }
+        // Spend the matching unlock server-side before the scan starts: one
+        // paid credit per run, and a credit another tab already spent cannot
+        // be reused from a stale page.
+        if (verdict === 'score' || verdict === 'report') {
+            if (!await consumeCredit(domain, verdict)) { showLockCard(domain); return; }
+        }
         currentMode = verdict;
 
         document.getElementById('score-lock').style.display = 'none';
@@ -983,7 +1020,10 @@
         document.getElementById('unlock-error').innerText = '';
     }
     function renderPayPalOrderButton() {
-        paypal.Buttons({
+        // One-time orders need intent=order; the subscription SDK is loaded
+        // with intent=subscription and cannot create orders, so the unlock
+        // buttons live in their own namespaced SDK instance.
+        window.paypalOrder.Buttons({
             style: { shape: 'rect', color: 'gold', layout: 'vertical', label: 'paypal' },
             createOrder: (data, actions) => actions.order.create({
                 intent: 'capture',
@@ -996,15 +1036,34 @@
             }),
             onApprove: async (data, actions) => {
                 await actions.order.capture();
-                // Browser is untrusted: when the API is connected it will
-                // re-verify this order server-to-server, exactly like the
-                // subscription activation webhook above.
-                const gateState = loadGate();
-                if (unlockKind === 'score') gateState.credits += 1;
-                else gateState.report_credits += 1;
-                saveGate(gateState);
+                // The browser is untrusted: the API re-verifies this order with
+                // PayPal (it exists, it is COMPLETED, and the captured amount
+                // equals this unlock's price) before anything is granted.
+                const domain = (document.getElementById('domain-input').value || '').trim()
+                    .toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+                const errBox = document.getElementById('unlock-error');
+                errBox.innerText = 'Confirming your payment with PayPal...';
+                let out = null, ok = false;
+                try {
+                    const res = await fetch(`${API_BASE}/unlock/verify`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order_id: data.orderID, domain, kind: unlockKind })
+                    });
+                    out = await res.json().catch(() => ({}));
+                    ok = res.ok && out.ok === true;
+                } catch (e) {
+                    ok = false;
+                }
+                if (!ok) {
+                    // Never claim money was accepted when we cannot prove it.
+                    errBox.innerText = (out && out.error)
+                        ? `Payment not credited: ${out.error}. Do not pay again - email hello@zerodaysentinel.xo.je and we will sort it.`
+                        : 'We could not confirm that payment with PayPal yet. Do not pay again - email hello@zerodaysentinel.xo.je and we will credit you.';
+                    return;
+                }
                 closeUnlock();
-                setStatus('Payment received. Your unlock is live - running your score now.');
+                setStatus('Payment confirmed by PayPal. Running your score now.');
                 startScan();
             },
             onError: (err) => {
@@ -1017,12 +1076,12 @@
     function loadPayPalOrderButton() {
         const container = document.getElementById('paypal-order-container');
         container.innerHTML = '';
-        if (window.paypal && window.paypal.Buttons) { renderPayPalOrderButton(); return; }
-        if (window.__paypalLoading) {
-            // The subscription SDK is already loading - same script serves both.
+        if (window.paypalOrder && window.paypalOrder.Buttons) { renderPayPalOrderButton(); return; }
+        if (window.__paypalOrderLoading) {
+            // The order SDK is already loading.
             let tries = 0;
             const poll = setInterval(function () {
-                if (window.paypal && window.paypal.Buttons) { clearInterval(poll); renderPayPalOrderButton(); }
+                if (window.paypalOrder && window.paypalOrder.Buttons) { clearInterval(poll); renderPayPalOrderButton(); }
                 else if (++tries > 80) {
                     clearInterval(poll);
                     document.getElementById('unlock-error').innerText =
@@ -1031,11 +1090,15 @@
             }, 250);
             return;
         }
-        window.__paypalLoading = true;
+        window.__paypalOrderLoading = true;
         const script = document.createElement('script');
-        script.src = `https://www.paypal.com/sdk/js?client-id=${PAYPAL_CLIENT_ID}&vault=true&intent=subscription&currency=USD`;
+        // One-time unlocks are ORDERS; the subscription SDK (intent=subscription)
+        // cannot create them, so this is a second, namespaced SDK instance.
+        script.setAttribute('data-namespace', 'paypalOrder');
+        script.src = `https://www.paypal.com/sdk/js?client-id=${PAYPAL_CLIENT_ID}&vault=false&intent=order&currency=USD`;
         script.onload = () => renderPayPalOrderButton();
         script.onerror = () => {
+            window.__paypalOrderLoading = false;
             document.getElementById('unlock-error').innerText =
                 'Could not load PayPal. Check your connection and try again.';
         };

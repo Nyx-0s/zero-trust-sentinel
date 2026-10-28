@@ -29,3 +29,5 @@ venv/
 
 # Harvey clone + local state
 .harvey/
+.vercel
+.env*

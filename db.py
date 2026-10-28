@@ -22,6 +22,24 @@ import asyncpg
 _pool: Optional[asyncpg.Pool] = None
 
 
+async def _configure_connection(conn: asyncpg.Connection) -> None:
+    """Per-connection codec setup: JSONB/JSON decode to real dicts/lists.
+
+    asyncpg codecs are registered PER CONNECTION, so this runs as the pool's
+    ``init`` callback for every new connection. Registering on a single
+    acquired connection (the old code) left every connection the pool created
+    later decoding jsonb as a raw string - which is exactly how
+    ``report['risk_assessment'][0]`` became ``'['`` and crashed the outbound
+    batch on one connection out of ten.
+    """
+    await conn.set_type_codec(
+        "jsonb", encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
+        decoder=json.loads, schema="pg_catalog")
+    await conn.set_type_codec(
+        "json", encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
+        decoder=json.loads, schema="pg_catalog")
+
+
 async def get_pool() -> asyncpg.Pool:
     """Get or create the database connection pool."""
     global _pool
@@ -36,19 +54,8 @@ async def get_pool() -> asyncpg.Pool:
             host = database_url.split("@")[-1].split("/")[0].split(":")[0]
             if host not in ("localhost", "127.0.0.1"):
                 database_url += ("&" if "?" in database_url else "?") + "sslmode=require"
-        _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
-        # JSONB columns (risk_assessment, raw_scan, payload, ...) decode to
-        # real dicts/lists; without this they arrive as strings and every
-        # consumer silently misbehaves (e.g. report.top_risks[:3] slices a
-        # string). Existing writers pass json.dumps(...), so the encoder
-        # passes strings through untouched.
-        async with _pool.acquire() as _conn:
-            await _conn.set_type_codec(
-                "jsonb", encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
-                decoder=json.loads, schema="pg_catalog")
-            await _conn.set_type_codec(
-                "json", encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
-                decoder=json.loads, schema="pg_catalog")
+        _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10,
+                                          init=_configure_connection)
     return _pool
 
 
@@ -213,6 +220,23 @@ async def init_db() -> None:
             UNIQUE(project_id, skill_id)
         )""")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_business_outputs_project ON business_outputs(project_id)")
+
+        # Paid one-time unlocks ($1.99 score / $9.99 full report).
+        # The browser may never grant itself a credit: a row exists only after
+        # the API has confirmed with PayPal that this exact order was COMPLETED
+        # for the exact amount. Entitlement is read from this table - never
+        # from localStorage - and spent exactly once.
+        await conn.execute("""CREATE TABLE IF NOT EXISTS unlocks (
+            id SERIAL PRIMARY KEY,
+            order_id VARCHAR(64) UNIQUE NOT NULL,
+            domain VARCHAR(255) NOT NULL,
+            kind VARCHAR(16) NOT NULL,
+            amount VARCHAR(16) NOT NULL,
+            status VARCHAR(16) DEFAULT 'paid',
+            consumed_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_unlocks_domain ON unlocks(domain, kind, status)")
 
 
 async def create_client(domain: str, email: str = "", name: str = "") -> int:
@@ -562,6 +586,98 @@ async def get_client_id_by_subscription(subscription_id: str) -> Optional[int]:
         return row["client_id"] if row else None
 
 
+async def record_unlock(order_id: str, domain: str, kind: str, amount: str) -> bool:
+    """Records a PayPal-verified one-time unlock. Returns True when new.
+
+    Idempotent on order_id: a webhook-style retry or a double-click on the
+    client can never mint the same paid credit twice.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "INSERT INTO unlocks (order_id, domain, kind, amount) "
+            "VALUES ($1, $2, $3, $4) ON CONFLICT (order_id) DO NOTHING",
+            order_id, domain, kind, amount,
+        )
+        return result.endswith("1")
+
+
+async def get_unlock_credits(domain: str) -> Dict[str, int]:
+    """Unspent paid credits for a domain, by kind ({'score': n, 'report': m})."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT kind, COUNT(*) AS n FROM unlocks "
+            "WHERE domain = $1 AND status = 'paid' GROUP BY kind",
+            domain,
+        )
+        credits = {"score": 0, "report": 0}
+        for row in rows:
+            if row["kind"] in credits:
+                credits[row["kind"]] = int(row["n"])
+        return credits
+
+
+async def consume_unlock(domain: str, kind: str) -> bool:
+    """Spends one paid credit for this domain. True only if one was available.
+
+    The SKIP LOCKED subquery makes two concurrent scans for the same domain
+    spend two different credits instead of double-spending one.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE unlocks SET status = 'consumed', consumed_at = NOW() "
+            "WHERE id = (SELECT id FROM unlocks WHERE domain = $1 AND kind = $2 "
+            "            AND status = 'paid' ORDER BY id LIMIT 1 "
+            "            FOR UPDATE SKIP LOCKED) "
+            "RETURNING id",
+            domain, kind,
+        )
+        return row is not None
+
+
+async def link_stripe_subscription(client_id: int, subscription_id: str) -> None:
+    """Stores a Stripe subscription id on the client's subscription row.
+
+    Stripe invoice events (payment failed / paid) carry the subscription id but
+    not our client_id, so this link is what lets /webhook/stripe resolve who the
+    invoice belongs to. Idempotent: re-linking the same pair is a no-op.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        exists = await conn.fetchrow(
+            "SELECT id FROM subscriptions WHERE client_id = $1", client_id,
+        )
+        if exists:
+            await conn.execute(
+                "UPDATE subscriptions SET stripe_subscription_id = $1 WHERE client_id = $2",
+                subscription_id, client_id,
+            )
+        else:
+            await conn.execute(
+                "INSERT INTO subscriptions (client_id, plan, status, stripe_subscription_id) "
+                "VALUES ($1, 'monthly', 'active', $2)",
+                client_id, subscription_id,
+            )
+
+
+async def get_client_id_by_stripe_subscription(subscription_id: str) -> Optional[int]:
+    """Finds the client ID for a Stripe subscription id ('sub_...').
+
+    Returns None when the subscription was never linked (a webhook for a
+    subscription created outside our checkout) - callers must then decline the
+    event rather than guess at a client.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT client_id FROM subscriptions WHERE stripe_subscription_id = $1",
+            subscription_id,
+        )
+        return row["client_id"] if row else None
+
+
 async def save_coupon(client_id: int, stripe_coupon_id: str, percent_off: int = 20,
                       duration: str = "repeating", duration_in_months: int = 3) -> None:
     """Save a coupon code for a client (win-back)."""
@@ -662,6 +778,21 @@ async def mark_stage_sent(lead_id: int, stage: str) -> None:
             "ON CONFLICT (lead_id, stage) DO NOTHING",
             lead_id, stage,
         )
+
+
+async def count_sends_today() -> int:
+    """Messages a provider accepted today (one row per lead stage send).
+
+    The outbound engine's daily counter is per-process; a cron/CI run starts
+    with an empty one, so it seeds itself from these records instead of
+    silently re-earning the full daily allowance on every invocation.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT count(*) AS n FROM lead_stages "
+            "WHERE sent_at >= date_trunc('day', NOW())")
+        return int(row["n"]) if row else 0
 
 
 async def has_stage_sent(lead_id: int, stage: str) -> bool:
@@ -796,15 +927,29 @@ async def update_lead_task_metadata(task_id: int, patch: Dict[str, Any]) -> None
         )
 
 
-async def set_lead_signals(task_id: int, signals: List[str], harvey_ref: str = "") -> None:
-    """Persist Harvey discovery signals + reference on a lead (metadata JSONB)."""
+async def set_lead_signals(task_id: int, signals: List[str], harvey_ref: str = "",
+                           evidence: Optional[Dict[str, Any]] = None) -> None:
+    """Persist discovery signals + reference + evidence URLs on a lead.
+
+    evidence is the hunter's proof (which URL showed what) - the qualification
+    trail a report or a reply can always be checked against.
+    """
+    patch: Dict[str, Any] = {"signals": signals or [], "harvey_ref": harvey_ref or ""}
+    if evidence:
+        # Keep it bounded: a homepage excerpt is useful evidence, a full page
+        # is not, and metadata is read by every dashboard query.
+        slim = {k: (v[:3000] if isinstance(v, str) else v)
+                for k, v in evidence.items()
+                if k in ("homepage_status", "homepage_text", "exposed_api_url",
+                         "staging_host", "staging_status", "security_page",
+                         "last_modified", "contact_source")}
+        patch["evidence"] = slim
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE lead_tasks SET metadata = coalesce(metadata, '{}'::jsonb) || "
-            "jsonb_build_object('signals', $1::jsonb, 'harvey_ref', to_jsonb($2::text)), "
-            "updated_at = NOW() WHERE id = $3",
-            json.dumps(signals or []), harvey_ref or "", task_id,
+            "UPDATE lead_tasks SET metadata = coalesce(metadata, '{}'::jsonb) || $1::jsonb, "
+            "updated_at = NOW() WHERE id = $2",
+            json.dumps(patch), task_id,
         )
 
 

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -40,6 +42,9 @@ os.environ.setdefault("GROQ_TPM_LIMIT", "0")  # no throttling: the simulation is
 os.environ.setdefault("SENDGRID_API_KEY", "SG.mock_for_simulation")
 os.environ.setdefault("RESEND_API_KEY", "re_mock_for_simulation")
 os.environ.setdefault("WIN_BACK_JITTER_SECONDS", "0")  # keep the simulation fast
+# The Stripe webhook refuses events when it cannot verify them, so the
+# simulation must configure a secret exactly like production does.
+os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "whsec_autopilot_simulation")
 
 import httpx  # noqa: E402
 
@@ -139,6 +144,15 @@ class MockDatabase:
                 CREATE TABLE IF NOT EXISTS trajectories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     client_id INTEGER, payload TEXT, created_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS unlocks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id TEXT UNIQUE NOT NULL,
+                    domain TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    amount TEXT NOT NULL,
+                    status TEXT DEFAULT 'paid',
+                    consumed_at TEXT, created_at TEXT
                 );
                 """
             )
@@ -343,7 +357,8 @@ class MockDatabase:
                 break
         return out
 
-    async def set_lead_signals(self, task_id: int, signals: list, harvey_ref: str = "") -> None:
+    async def set_lead_signals(self, task_id: int, signals: list, harvey_ref: str = "",
+                                evidence=None) -> None:
         with self.lock:
             row = self.conn.execute(
                 "SELECT metadata FROM lead_tasks WHERE id = ?", (task_id,)).fetchone()
@@ -353,6 +368,8 @@ class MockDatabase:
                 meta = {}
             meta["signals"] = signals or []
             meta["harvey_ref"] = harvey_ref or ""
+            if evidence:
+                meta["evidence"] = evidence
             self.conn.execute(
                 "UPDATE lead_tasks SET metadata = ?, updated_at = ? WHERE id = ?",
                 (json.dumps(meta), now_iso(), task_id))
@@ -412,6 +429,12 @@ class MockDatabase:
                 (lead_id, stage)).fetchone()
             return row is not None
 
+    async def count_sends_today(self) -> int:
+        with self.lock:
+            rows = self.conn.execute("SELECT sent_at FROM lead_stages").fetchall()
+            today = datetime.utcnow().date().isoformat()
+            return sum(1 for r in rows if str(r["sent_at"])[:10] == today)
+
     # -- subscriptions / coupons ------------------------------------------
     async def activate_subscription(self, client_id: int, plan: str = "monthly") -> None:
         with self.lock:
@@ -434,6 +457,54 @@ class MockDatabase:
                 "WHERE client_id = ?", (now_iso(), client_id))
             self.conn.commit()
 
+    async def update_client_scan(self, client_id: int, risk_score: int,
+                                 raw_scan: dict) -> None:
+        # Mirrors db.py: the client row's score and last_scan must track the
+        # report the cockpit serves instead of staying at the INSERT default.
+        with self.lock:
+            self.conn.execute(
+                "UPDATE clients SET risk_score = ?, last_scan = ? WHERE id = ?",
+                (risk_score, now_iso(), client_id))
+            self.conn.commit()
+
+    async def record_unlock(self, order_id: str, domain: str, kind: str,
+                            amount: str) -> bool:
+        # Mirrors db.py: UNIQUE(order_id) means a replay never mints a second
+        # credit for the same captured payment.
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO unlocks (order_id, domain, kind, amount, status, created_at) "
+                "VALUES (?, ?, ?, ?, 'paid', ?) ON CONFLICT(order_id) DO NOTHING",
+                (order_id, domain, kind, amount, now_iso()))
+            self.conn.commit()
+            return cur.rowcount == 1
+
+    async def get_unlock_credits(self, domain: str) -> dict:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT kind, COUNT(*) AS n FROM unlocks "
+                "WHERE domain = ? AND status = 'paid' GROUP BY kind",
+                (domain,)).fetchall()
+            credits = {"score": 0, "report": 0}
+            for row in rows:
+                if row["kind"] in credits:
+                    credits[row["kind"]] = row["n"]
+            return credits
+
+    async def consume_unlock(self, domain: str, kind: str) -> bool:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT id FROM unlocks WHERE domain = ? AND kind = ? "
+                "AND status = 'paid' ORDER BY id LIMIT 1",
+                (domain, kind)).fetchone()
+            if not row:
+                return False
+            self.conn.execute(
+                "UPDATE unlocks SET status = 'consumed', consumed_at = ? WHERE id = ?",
+                (now_iso(), row["id"]))
+            self.conn.commit()
+            return True
+
     async def link_paypal_subscription(self, client_id: int, subscription_id: str) -> None:
         # Mirrors db.py: store the PayPal subscription id ('I-...') on the
         # client's row so webhooks without custom_id can resolve the client.
@@ -455,6 +526,30 @@ class MockDatabase:
         with self.lock:
             row = self.conn.execute(
                 "SELECT client_id FROM subscriptions WHERE paypal_subscription_id = ?",
+                (subscription_id,)).fetchone()
+            return row["client_id"] if row else None
+
+    async def link_stripe_subscription(self, client_id: int, subscription_id: str) -> None:
+        # Mirrors db.py: store the Stripe subscription id ('sub_...') so invoice
+        # events (payment failed / paid) can resolve which client they belong to.
+        with self.lock:
+            exists = self.conn.execute(
+                "SELECT id FROM subscriptions WHERE client_id = ?", (client_id,)).fetchone()
+            if exists:
+                self.conn.execute(
+                    "UPDATE subscriptions SET stripe_subscription_id = ? WHERE client_id = ?",
+                    (subscription_id, client_id))
+            else:
+                self.conn.execute(
+                    "INSERT INTO subscriptions (client_id, plan, status, stripe_subscription_id, created_at) "
+                    "VALUES (?, 'monthly', 'active', ?, ?)",
+                    (client_id, subscription_id, now_iso()))
+            self.conn.commit()
+
+    async def get_client_id_by_stripe_subscription(self, subscription_id: str) -> int | None:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT client_id FROM subscriptions WHERE stripe_subscription_id = ?",
                 (subscription_id,)).fetchone()
             return row["client_id"] if row else None
 
@@ -772,6 +867,21 @@ class FakeAsyncClient:
     async def get(self, url, headers=None, **kwargs):
         """PayPal server-to-server lookups (subscription verification)."""
         import json as _json
+        if "paypal.com" in url and "/v2/checkout/orders/" in url:
+            order_id = url.rsplit("/", 1)[-1]
+            if order_id == "ORDER-UNKNOWN":        # PayPal does not know it
+                return _FakeHTTPResponse(404, _json.dumps({"message": "Order not found"}))
+            if order_id == "ORDER-APPROVED":       # approved but never captured
+                return _FakeHTTPResponse(200, _json.dumps({
+                    "id": order_id, "status": "APPROVED",
+                    "purchase_units": [{"amount": {"currency_code": "USD",
+                                                    "value": "1.99"}}]}))
+            value = "0.01" if order_id == "ORDER-CHEAP" else (
+                "9.99" if order_id == "ORDER-999" else "1.99")
+            return _FakeHTTPResponse(200, _json.dumps({
+                "id": order_id, "status": "COMPLETED",
+                "purchase_units": [{"amount": {"currency_code": "USD",
+                                                "value": value}}]}))
         if "paypal.com" in url and "/v1/billing/subscriptions/" in url:
             sub_id = url.rsplit("/", 1)[-1]
             if sub_id == "I-BOGUS":        # PayPal does not know this subscription
@@ -945,7 +1055,7 @@ def run_simulation() -> None:
         sent_count = asyncio.run(engine.process_batch())
         matching = [m for m in SENT_EMAILS
                     if LEAD_EMAIL in (m.get("to") or [])
-                    and "risk assessment" in (m.get("subject") or "").lower()]
+                    and "public-surface assessment" in (m.get("subject") or "").lower()]
         stage_marked = asyncio.run(mock_db.has_stage_sent(scan_id, "initial"))
         stage(4, "Outbound engine sent 'Initial Scan' email (permission-based)",
               sent_count >= 1 and len(matching) == 1 and stage_marked,
@@ -1273,6 +1383,115 @@ def run_simulation() -> None:
               f"sweep_status={status_sweep15} "
               f"reports={reports_before15}->{reports_after15} "
               f"requeued={requeued15}")
+
+        # ---- Stage 16: Stripe verification through the REAL SDK ---------------
+        # Stages 5-7 drive the handler through a fake stripe namespace, which
+        # cannot catch a wrong exception class or a non-dict event. This stage
+        # puts the real module back so stripe.Webhook.construct_event actually
+        # runs against signed, forged, unsigned and unconfigured requests.
+        import stripe as real_stripe
+
+        saved_stripe = api.stripe
+        saved_secret = os.environ.get("STRIPE_WEBHOOK_SECRET")
+        cid16 = asyncio.run(mock_db.get_client_by_domain(TARGET_DOMAIN))["id"]
+        payload16 = json.dumps({
+            "id": "evt_real_sdk_1",
+            "type": "checkout.session.completed",
+            "data": {"object": {"metadata": {"client_id": str(cid16),
+                                              "plan": "monthly"}}},
+        }).encode()
+        secret16 = "whsec_autopilot_simulation"
+        ts16 = str(int(time.time()))
+        mac16 = hmac.new(secret16.encode(), (ts16 + ".").encode() + payload16,
+                         hashlib.sha256).hexdigest()
+        try:
+            api.stripe = real_stripe
+            os.environ["STRIPE_WEBHOOK_SECRET"] = secret16
+
+            signed16 = client.post("/webhook/stripe", content=payload16,
+                                   headers={"stripe-signature": f"t={ts16},v1={mac16}"})
+            forged16 = client.post("/webhook/stripe", content=payload16,
+                                   headers={"stripe-signature": "t=1,v1=deadbeef"})
+            nosig16 = client.post("/webhook/stripe", content=payload16)
+            # No secret configured -> verification is impossible, so the event
+            # must be refused (503) instead of accepted on an empty check.
+            os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
+            nosec16 = client.post("/webhook/stripe", content=payload16,
+                                  headers={"stripe-signature": f"t={ts16},v1={mac16}"})
+
+            # A signed invoice that failed to charge must take the subscription
+            # out of 'active' - a paid state may never survive a failed payment.
+            os.environ["STRIPE_WEBHOOK_SECRET"] = secret16
+            invoice16 = json.dumps({
+                "id": "evt_real_sdk_inv_failed",
+                "type": "invoice.payment_failed",
+                "data": {"object": {"id": "in_16",
+                                    "metadata": {"client_id": str(cid16)}}},
+            }).encode()
+            ts16b = str(int(time.time()))
+            mac16b = hmac.new(secret16.encode(), (ts16b + ".").encode() + invoice16,
+                              hashlib.sha256).hexdigest()
+            failed16 = client.post("/webhook/stripe", content=invoice16,
+                                   headers={"stripe-signature": f"t={ts16b},v1={mac16b}"})
+        finally:
+            api.stripe = saved_stripe
+            if saved_secret is not None:
+                os.environ["STRIPE_WEBHOOK_SECRET"] = saved_secret
+
+        # The correctly signed event must have activated the subscription
+        # through the real path; the signed failed-invoice must have removed it.
+        sub16 = mock_db.get_subscription(cid16)
+        stage(16, "Stripe webhook: real signature verification accepts a correctly signed event, rejects forged/unsigned/unconfigured ones, and a failed invoice deactivates the subscription",
+              signed16.status_code == 200
+              and signed16.json().get("received") is True
+              and forged16.status_code == 400
+              and nosig16.status_code == 400
+              and nosec16.status_code == 503
+              and failed16.status_code == 200
+              and bool(sub16) and sub16["status"] == "cancelled",
+              f"signed={signed16.status_code} forged={forged16.status_code} "
+              f"nosig={nosig16.status_code} no_secret={nosec16.status_code} "
+              f"failed_invoice={failed16.status_code} "
+              f"sub={sub16['status'] if sub16 else None}")
+
+        # ---- Stage 17: paid unlocks are verified, stored, and spent once ------
+        # The cockpit used to grant these from localStorage alone. Now the API
+        # must confirm the order with PayPal (exists, COMPLETED, exact amount)
+        # before a credit exists, and each credit is spendable exactly once.
+        os.environ.setdefault("PAYPAL_CLIENT_ID", "mock_client")
+        os.environ.setdefault("PAYPAL_SECRET", "mock_secret")
+        d17 = TARGET_DOMAIN
+
+        unknown17 = client.post("/unlock/verify", json={"order_id": "ORDER-UNKNOWN",
+                                                        "domain": d17, "kind": "score"})
+        pending17 = client.post("/unlock/verify", json={"order_id": "ORDER-APPROVED",
+                                                        "domain": d17, "kind": "score"})
+        cheap17 = client.post("/unlock/verify", json={"order_id": "ORDER-CHEAP",
+                                                      "domain": d17, "kind": "report"})
+        good17 = client.post("/unlock/verify", json={"order_id": "ORDER-GOOD",
+                                                     "domain": d17, "kind": "score"})
+        replay17 = client.post("/unlock/verify", json={"order_id": "ORDER-GOOD",
+                                                       "domain": d17, "kind": "score"})
+        bal17 = client.get(f"/unlock/credits?domain={d17}").json()
+        spend17 = client.post("/unlock/consume", json={"domain": d17, "kind": "score"})
+        double17 = client.post("/unlock/consume", json={"domain": d17, "kind": "score"})
+        bal_after17 = client.get(f"/unlock/credits?domain={d17}").json()
+
+        stage(17, "Paid unlocks: a PayPal-verified order grants exactly one credit, forgeries are refused, and a credit is spent once",
+              unknown17.status_code == 404
+              and pending17.status_code == 409
+              and cheap17.status_code == 409
+              and good17.status_code == 200 and good17.json().get("ok") is True
+              and replay17.status_code == 200 and replay17.json().get("replay") is True
+              and bal17.get("credits", {}).get("score") == 1
+              and spend17.status_code == 200
+              and double17.status_code == 402
+              and bal_after17.get("credits", {}).get("score") == 0,
+              f"unknown={unknown17.status_code} pending={pending17.status_code} "
+              f"wrong_amount={cheap17.status_code} good={good17.status_code} "
+              f"replay={replay17.json().get('replay')} "
+              f"balance={bal17.get('credits')} spend={spend17.status_code} "
+              f"double_spend={double17.status_code} after={bal_after17.get('credits')}")
 
 
 def main() -> int:

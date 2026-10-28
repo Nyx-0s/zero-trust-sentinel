@@ -1,9 +1,9 @@
-# GO-LIVE — Zero-Trust Sentinel (Distributed: Replit Body · Laptop Brain · SendGrid Voice)
+# GO-LIVE — Zero-Trust Sentinel (Distributed: Vercel Body · GitHub Actions Brain · SendGrid Voice)
 
-**Face:** `https://zerodaysentinel.xo.je`
-**Body:** `https://zero-trust-sentinel--onthecontraryan.replit.app`
+**Face:** `https://zerodaysentinel.xo.je` (InfinityFree static hosting)
+**Body:** `https://zero-trust-sentinel-opal.vercel.app` (Vercel Hobby, Python runtime)
 **Voice:** SendGrid, domain `zerodaysentinel.xo.je` (Resend is the coded fallback)
-**Brain:** `python3 hunter.py` on the laptop
+**Brain:** `python3 hunter.py` on the laptop, plus the `hunter-discovery` GitHub Actions loop
 **Wallet:** PayPal Native Button, plan `$49/mo`
 
 Nothing on this page is optional. If one row is missing, the Autopilot is not
@@ -17,8 +17,8 @@ Managed at your DNS provider (the `xo.je` zone). Exact records:
 
 | Type | Name | Value / Target | Purpose |
 |---|---|---|---|
-| `CNAME` | `@` | `zero-trust-sentinel--onthecontraryan.replit.app` | The Face → the Body |
-| `CNAME` | `www` | `zero-trust-sentinel--onthecontraryan.replit.app` | apex alias, same target |
+| `A` | `@` | `185.27.134.65` | The Face (InfinityFree) |
+| `A` | `www` | `185.27.134.65` | apex alias, same target |
 | `CNAME` | `em3457` | `u117291738.wl239.sendgrid.net` | SendGrid link/return host |
 | `CNAME` | `s1._domainkey` | `s1.domainkey.u117291738.wl239.sendgrid.net` | DKIM signing key 1 |
 | `CNAME` | `s2._domainkey` | `s2.domainkey.u117291738.wl239.sendgrid.net` | DKIM signing key 2 |
@@ -26,13 +26,13 @@ Managed at your DNS provider (the `xo.je` zone). Exact records:
 
 Notes that bite people:
 
-- The `@` CNAME is an **apex CNAME**. Some DNS hosts (Cloudflare, Route 53
-  with alias records) allow it; plain BIND and a few others reject it. If yours
-  does, use an **ALIAS/ANAME/flatten** record, or an `A` record if Replit
-  publishes one.
-- Replit serves the custom domain over **HTTPS automatically** and provisions
-  the certificate — after DNS resolves, give it 5–15 minutes, then confirm the
-  padlock on `https://zerodaysentinel.xo.je` before telling anyone the site is up.
+- The Body is **not** on this domain. `zerodaysentinel.xo.je` serves the static
+  Face only; every API call from the page targets
+  `DEFAULT_API = https://zero-trust-sentinel-opal.vercel.app` in
+  `static/index.html` (override per-visit with `?api=<url>`).
+- InfinityFree presents the challenge script (`/aes.js`) on a **cold** first
+  request. Browsers clear it in one reload; `curl` without a browser
+  User-Agent usually gets an empty reply. That is the host, not the site.
 - Keep `p=none` on `_dmarc` until you have watched a week of SendGrid's
   dashboard for bounces. Only tighten to `p=quarantine`/`p=reject` after that.
 - **InfinityFree free-plan limits:** the zone editor only creates CNAME, MX and
@@ -40,9 +40,8 @@ Notes that bite people:
   SendGrid's auth is CNAME-only, which is exactly why it was chosen over
   Resend (whose TXT DKIM could never be published here). Domain
   authentication validates with all 3 CNAMEs even without DMARC.
-- `FROM_EMAIL` must be `security@zerodaysentinel.xo.je`
-  (the code defaults to exactly that) — SendGrid's domain auth covers every
-  address on the domain.
+- `FROM_EMAIL` is `updates@zerodaysentinel.xo.je` — SendGrid's domain auth
+  covers every address on the domain.
 
 ### SendGrid domain authentication (verified)
 
@@ -65,60 +64,69 @@ DKIM record silently breaks every email the Voice sends.
 
 ---
 
-## 2. Replit Secrets (exact list)
+## 2. Vercel environment variables (exact list)
 
-Set these in Replit → **Secrets** (never in code, never in `.replit`):
+Set with `vercel env add <NAME> production` (values from `.env`; never commit
+them, never paste them in chat). All 16 are present on both `preview` and
+`production` as of 28 Oct 2026:
 
-| Secret | Feeds | Notes |
+| Variable | Feeds | Notes |
 |---|---|---|
-| `GROQ_API_KEY` | `hunter.py` (laptop: env or `.env`) and any LLM scoring | Hunter reads it from `.env` on the laptop — it does **not** need to be in Replit unless the API uses it |
+| `GROQ_API_KEY` | `main.py` LangGraph analysis, `hunter.py` | required at import time — without it `/health` reports `llm_configured: false` |
 | `SENDGRID_API_KEY` | `outbound_engine.py`, `api.py` win-back | `SG.…` key, **Mail Send** scope only (key `autopilot-voice`); set 25 Oct 2026 |
-| `RESEND_API_KEY` | fallback only | *not set on Replit* — code prefers SendGrid and falls back to Resend if this exists |
-| `PAYPAL_CLIENT_ID` | `api.py` checkout + Native Button | Public JS-SDK id, also hardcoded in `static/index.html` |
-| `PAYPAL_SECRET` | `api.py` server-to-server | **Secret.** Server only. |
+| `RESEND_API_KEY` | fallback only | code prefers SendGrid and falls back to Resend if this exists |
+| `FROM_EMAIL` | outbound engine, win-back | `updates@zerodaysentinel.xo.je` |
+| `DATABASE_URL` | `db.py` (Neon Postgres) | `postgresql://…?sslmode=require` |
+| `SITE_URL` | report/unsubscribe links in email, hunter target | `https://zero-trust-sentinel-opal.vercel.app` |
+| `PAYPAL_CLIENT_ID` | `api.py` checkout + Native Button | public JS-SDK id, also hardcoded in `static/index.html` |
+| `PAYPAL_SECRET` | `api.py` server-to-server | **secret** |
 | `PAYPAL_PLAN_ID` | `api.py` `/checkout` | `$49/mo` plan (`P-8E455735W3884671YNLNRSVQ`) |
-| `PAYPAL_WEBHOOK_ID` | `api.py` `/webhook/paypal` signature verification | Create the webhook *after* the domain is live |
-| `DATABASE_URL` | `db.py` (Neon Postgres) | `postgres://…?sslmode=require` |
-| `FROM_EMAIL` | `outbound_engine.py`, `api.py` win-back | `security@zerodaysentinel.xo.je` |
-| `SESSION_SECRET` | session signing | already present |
-| `SITE_URL` | report links, referral links | `https://zerodaysentinel.xo.je` |
+| `PAYPAL_WEBHOOK_ID` | `/webhook/paypal` signature verification | create the webhook *after* the domain is live |
+| `PAYPAL_MODE` | which PayPal host the SDK calls | `sandbox` while testing, `live` when ready |
+| `MAX_EMAILS_PER_DAY` | outbound engine daily cap | `40` (Black October window; dial back to 20 after) |
+| `JITTER_MIN_SECONDS` / `JITTER_MAX_SECONDS` | pacing between sends | `30` / `60` |
+| `CRON_SECRET` | `/internal/run-batch` gate | random 48-hex; same value as the GitHub secret |
+| `INLINE_SCAN` | `api.py` | `1` — serverless has no background task, scans run in-request |
 
-Set at runtime, not as secrets (Replit provides `PORT`):
-
-- `PAYPAL_MODE` = `live` once the webhook and plan are live (`sandbox` while testing).
-- `MAX_EMAILS_PER_DAY`, `JITTER_MIN_SECONDS`, `JITTER_MAX_SECONDS` — leave
-  defaults until the domain has warmed.
-
-Laptop `.env` needs: `GROQ_API_KEY`, `HUNTER_API_URL` (optional override; the
-default in `hunter.py` is now `https://zerodaysentinel.xo.je`).
+GitHub Actions reads its own copy of `SITE_URL`, `CRON_SECRET`,
+`DATABASE_URL`, `GROQ_API_KEY`, `SENDGRID_API_KEY`, `RESEND_API_KEY`,
+`FROM_EMAIL`, `MAX_EMAILS_PER_DAY`, `JITTER_*` as repository secrets
+(`gh secret set <NAME> --repo Nyx-0s/zero-trust-sentinel`).
 
 ---
 
 ## 3. PayPal wiring
 
-1. App + credentials → REST app → copy the **Client ID** (goes in Secrets *and*
-   is already hardcoded in `static/index.html`).
+1. App + credentials → REST app → copy the **Client ID** (goes in Vercel env
+   *and* is already hardcoded in `static/index.html`).
 2. Subscriptions → plan `$49/mo` → copy the **plan id** (already hardcoded).
-3. Webhooks → add `https://zerodaysentinel.xo.je/webhook/paypal` with events:
-   `PAYPAL.BILLING.SUBSCRIPTION.ACTIVATED`, `.CANCELLED`, `.PAYMENT.FAILED`.
-   Copy the **Webhook ID** into `PAYPAL_WEBHOOK_ID`.
+3. Webhooks → add `https://zero-trust-sentinel-opal.vercel.app/webhook/paypal`
+   with events: `PAYPAL.BILLING.SUBSCRIPTION.ACTIVATED`, `.CANCELLED`,
+   `.PAYMENT.FAILED`. Copy the **Webhook ID** into `PAYPAL_WEBHOOK_ID`.
+   (The Face is static and cannot receive webhooks — the Body must own them.)
 4. Flip `PAYPAL_MODE` to `live` only after step 3 succeeds.
 
 ---
 
 ## 4. Run order (the Autopilot boot sequence)
 
-1. **DNS** above resolves; `https://zerodaysentinel.xo.je/health` returns
-   `{"status":"healthy"}` — not Replit's 307 auth shield.
-2. **Replit → Run** (starts `uvicorn api:app`). Cockpit at `/`.
-3. **Replit → Shell →** `python outbound_engine.py` — read the first two lines:
-   - `[HEALTHCHECK] GO: SendGrid accepted the test email …` → the Voice is live.
-   - `[HEALTHCHECK] HOLD: …` → **stop.** Fix domain auth/DKIM/API key before the
+1. `vercel deploy --prod` → `GET https://zero-trust-sentinel-opal.vercel.app/health`
+   returns `{"status":"healthy"}` (with `llm_configured: true` and
+   `email_sender: "sendgrid"`).
+2. Upload `static/` to InfinityFree `htdocs/` over FTP; the Face must serve
+   `DEFAULT_API = https://zero-trust-sentinel-opal.vercel.app`.
+3. **Sender-health gate:** run the probe once —
+   `python3 -c "import asyncio, outbound_engine as o; print(asyncio.run(o.OutboundEngine().resend_health_check()))"`
+   - prints `True` + `[HEALTHCHECK] GO: SendGrid accepted the test email …` →
+     the Voice is live.
+   - `False` / `HOLD` → **stop.** Fix domain auth/DKIM/API key before the
      engine mails a single real lead.
-4. **Laptop →** `python3 hunter.py --dry-run` (see what the Brain *would* send),
-   then `python3 hunter.py` (real ingest). Every lead prints
-   `✅ [HUNT] <domain> ingested.` or `❌ [HUNT] <domain> failed: …`.
-5. **Laptop →** `python3 verify_live.py` — prints **GO-LIVE** or **HOLD**.
+4. **Brain:** `python3 hunter.py --dry-run` (see what it *would* send), then
+   `python3 hunter.py` (real ingest), or trigger the `hunter-discovery`
+   workflow (`gh workflow run hunter-discovery`).
+5. **Voice:** `gh workflow run outbound-engine` (or wait for the hourly
+   schedule) — it POSTs `/internal/run-batch` with `CRON_SECRET`.
+6. `python3 verify_live.py` — prints **GO-LIVE** or **HOLD**.
 
 ---
 
@@ -126,8 +134,8 @@ default in `hunter.py` is now `https://zerodaysentinel.xo.je`).
 
 `verify_live.py` prints `HOLD` if any of these are true, and names the limb:
 
-- `/health` unreachable, non-200, or behind Replit's `307 __replshield` → the
-  Body is private; set the deployment to public.
+- `/health` unreachable, non-200, or behind an auth shield → the Body is
+  private; fix the deployment's visibility.
 - `/capture` does not return `200` with a `scan_id` → the Brain cannot ingest.
 - `/task/{id}` never reaches `completed` → the pipeline is stalled.
 - `id="digital-twin"` missing from `/` → subscribers lose the flagship feature.
@@ -136,27 +144,16 @@ A HOLD is not a warning. It means the Autopilot is currently manual.
 
 ---
 
-## 6. Observed state — 25 Oct 2026 (measured, not assumed)
+## 6. Observed state — 28 Oct 2026 (measured, not assumed)
 
 | Limb | Target | Result |
 |---|---|---|
-| Body | `https://zero-trust-sentinel--onthecontraryan.replit.app` | **GO-LIVE** — `/health` 200 `healthy`; `POST /capture` → `200 started scan_id=1`; `/task/1` → `hot`; cockpit serves the Digital Twin card with `--` placeholders |
-| Face | `https://zerodaysentinel.xo.je` | **HOLD** — apex/www still resolve to `185.27.134.65` (`A` record), which presents the shared **`CN=xo.je` (ZeroSSL)** certificate and serves a JS challenge (`/aes.js`), not the Replit app. |
-| Voice | SendGrid | **DNS GO / end-to-end pending** — all 3 CNAMEs resolve from the authoritative NS and SendGrid reports the domain **Verified**; `SENDGRID_API_KEY` (Mail Send only) is stored in Replit Secrets. The startup `[HEALTHCHECK]` probe has **not yet been run on Replit** — run step 3 above and require `GO` before the engine mails a real lead. `_dmarc` absent (InfinityFree free plan cannot create it; advisory only). |
+| Body | `https://zero-trust-sentinel-opal.vercel.app` | **GO-LIVE** — `/health` 200 `healthy` (`llm_configured: true`, `email_sender: sendgrid`); cockpit + all static pages 200; `POST /capture` → `started`; inline scan → `hot` with a fresh report; `/report/{domain}` refreshes past 24h; `/internal/run-batch` answers 403 without the token and 200 with it; `/api/ops/summary` returns live DB aggregates |
+| Face | `https://zerodaysentinel.xo.je` | **GO** — all 19 files from `static/` uploaded to `htdocs/`; browser run of the free assessment did OPTIONS 200 → POST `/capture` 200 → `/task/7` → `/report/example.net` → score 65/100 with findings rendered. (curl without a browser UA gets the InfinityFree challenge or an empty reply — expected.) |
+| Voice | SendGrid | **DNS GO / end-to-end pending** — all 3 CNAMEs resolve and SendGrid reports the domain **Verified**; `SENDGRID_API_KEY` is set on Vercel. The startup probe has **not yet been run** — run step 3 above and require `GO` before the engine mails a real lead. `_dmarc` absent (InfinityFree free plan cannot create it; advisory only). |
+| Brain | `hunter.py` / Actions | **Configured** — workflow files and repo secrets are in place; loops activate once the branch is pushed |
+| Wallet | PayPal | **HOLD** — webhook still points at the sandbox/old URL until step 3 is redone against the Vercel Body |
 
-Fixes, in order:
-
-1. Change `@` and `www` from the current `A 185.27.134.65` to
-   `CNAME → zero-trust-sentinel--onthecontraryan.replit.app` (or ALIAS/flatten).
-   Then in Replit → Deployments → Custom Domain, add `zerodaysentinel.xo.je`
-   so Replit provisions the certificate for *that* name — not the shared `xo.je` one.
-2. ~~Add the four Resend records~~ **superseded**: the Voice moved to SendGrid
-   (Resend's TXT DKIM is unpublishable on the InfinityFree free plan). The
-   three SendGrid CNAMEs are live and verified. Remaining: run the startup
-   health check on Replit and confirm `[HEALTHCHECK] GO`.
-3. Re-run `python3 verify_live.py` — it must print **GO-LIVE** for
-   `zerodaysentinel.xo.je`, not just for the Replit URL.
-
-Test artifacts left behind by these probes: lead `scan_id=1` for `example.com`
-in Neon (from `verify_live.py`) — safe to delete.
-
+Test artifacts left behind by these probes: leads `figma.com`, `example.com`,
+`example.org`, `example.net` and their reports in Neon — safe to delete before
+a real launch.

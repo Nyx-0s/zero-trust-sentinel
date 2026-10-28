@@ -20,19 +20,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import stripe
-import httpx
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+import httpx
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
 # Load .env BEFORE `from main import run_scan`: main.py builds the Groq client
 # at import time and raises OpenAIError if GROQ_API_KEY is absent. Existing
-# process environment (Replit/production secrets) is never overridden.
+# process environment (Vercel/production secrets) is never overridden.
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +44,7 @@ from main import run_scan
 from simulation import simulate_trajectory
 from db import (
     create_client,
+    get_pool,
     get_client_by_domain,
     get_client_by_id,
     create_report,
@@ -58,8 +61,14 @@ from db import (
     mark_lead_emailed,
     activate_subscription,
     deactivate_subscription,
+    update_client_scan,
+    record_unlock,
+    get_unlock_credits,
+    consume_unlock,
     link_paypal_subscription,
     get_client_id_by_subscription,
+    link_stripe_subscription,
+    get_client_id_by_stripe_subscription,
     save_coupon,
     get_client,
     has_event_processed,
@@ -93,6 +102,12 @@ import business_intel as business
 # Initialize Stripe with your secret key
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
+# Resolved from the REAL stripe module at import time, so the except clause
+# still names the right class when tests swap in a fake stripe namespace.
+# Older SDKs exported it only as stripe.error.SignatureVerificationError;
+# falling back to ValueError keeps the webhook rejecting bad input either way.
+STRIPE_SIGNATURE_ERROR = getattr(stripe, "SignatureVerificationError", ValueError)
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Zero-Trust Sentinel API",
@@ -111,6 +126,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serverless (Vercel) freezes the instance right after a response, so a
+# detached asyncio task never finishes a scan there. INLINE_SCAN=1 runs scans
+# inside the request instead; uvicorn/Docker keeps the fire-and-forget path.
+INLINE_SCAN = os.getenv("INLINE_SCAN", "").strip().lower() in ("1", "true", "yes")
+
+
+async def _await_or_spawn(coro) -> None:
+    """Run a scan inline (serverless) or as a background task (long-lived)."""
+    if INLINE_SCAN:
+        await coro
+    else:
+        asyncio.create_task(coro)
+
+
+# Shared secret for the external cron that drives outbound batches on
+# serverless (no long-lived worker process there). Unset = endpoint disabled.
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+
+# How old a report may be before a completed scan refreshes it. Mirrors the
+# public /report/{domain} serving window so the two never disagree.
+REPORT_FRESH_SECONDS = 24 * 3600
 
 
 def _paypal_api_base() -> str:
@@ -152,6 +189,7 @@ class LeadCapture(BaseModel):
     name: str = "there"
     signals: List[str] = []  # Harvey discovery signals (exposed_api, staging_exposed, ...)
     harvey_ref: str = ""     # Harvey discovery reference (ties replies to the finding)
+    evidence: Dict[str, Any] = {}  # hunter proof: which URL showed what
 
 
 def _coerce_client_id(raw: Any) -> Optional[int]:
@@ -197,8 +235,9 @@ async def create_scan(request: ScanRequest) -> Dict[str, Any]:
     task_id = await create_scan_task(domain, request.client_id)
 
     # 4. Start background scan
-    # Use create_task so the HTTP response returns immediately
-    asyncio.create_task(run_scan_background(task_id, domain, request.client_id))
+    # Use create_task so the HTTP response returns immediately (inline on
+    # serverless where detached tasks are killed with the response).
+    await _await_or_spawn(run_scan_background(task_id, domain, request.client_id))
 
     return {
         "status": "started",
@@ -241,6 +280,9 @@ async def run_scan_background(task_id: str, domain: str, client_id: Optional[str
             risk_assessment=result.get("risk_assessment", []),
             remediation_plan=result.get("remediation_plan", []),
         )
+        # The client row must never lag behind its own report (score/last_scan).
+        await update_client_scan(client_db_id, result.get("risk_score", 100),
+                                 result.get("raw_scan", {}))
         await update_scan_task(task_id, "completed")
 
     except Exception as e:
@@ -291,8 +333,9 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
     task_id = await create_lead_task(domain, lead.email, lead.name)
 
     # 3b. Persist Harvey discovery signals so the Analyst/Editor prioritize them
-    if lead.signals or lead.harvey_ref:
-        await set_lead_signals(task_id, lead.signals, lead.harvey_ref)
+    if lead.signals or lead.harvey_ref or lead.evidence:
+        await set_lead_signals(task_id, lead.signals, lead.harvey_ref,
+                               evidence=lead.evidence or None)
 
     # 4. If referred, apply the 1-month-free discount
     #    (coupons FK references clients.id; client exists from step 3)
@@ -300,9 +343,11 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
         await apply_referral_discount(referral["id"], client_db_id)
         print(f"[REFERRAL] Applied discount for {domain} (Referral ID: {referral['id']})")
 
-    # 5. Trigger background scan (signals flow into the LangGraph swarm)
-    asyncio.create_task(process_lead_scan(task_id, domain, lead.email, lead.name,
-                                           signals=lead.signals))
+    # 5. Trigger background scan (signals flow into the LangGraph swarm).
+    #    Inline when INLINE_SCAN=1: the POST only returns once the report
+    #    exists, so the Face's first poll already sees a terminal state.
+    await _await_or_spawn(process_lead_scan(task_id, domain, lead.email, lead.name,
+                                            signals=lead.signals))
 
     return {"status": "started", "scan_id": task_id, "client_id": client_db_id,
             "referral_applied": bool(referral)}
@@ -380,9 +425,17 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
         # Run LangGraph for full analysis (signals prioritize the Analyst)
         result = await run_scan(domain, client_id=str(client_db_id), signals=signals)
 
-        # Save report against the real client account - but never twice: a
-        # recovery run that follows a crash must not duplicate the report.
-        if not await get_latest_report_by_domain(domain):
+        # Save the report against the real client account - but never twice
+        # for one logical run: a recovery run that follows a crash must not
+        # duplicate the report. A report older than the public route's 24h
+        # serving window is stale, though - without refreshing it here,
+        # /report/{domain} would trigger a fresh scan on every visit and
+        # still never replace what it serves.
+        existing_report = await get_latest_report_by_domain(domain)
+        existing_at = existing_report.get("created_at") if existing_report else None
+        report_is_fresh = bool(existing_at) and (
+            datetime.utcnow() - existing_at).total_seconds() < REPORT_FRESH_SECONDS
+        if not report_is_fresh:
             await create_report(
                 client_id=client_db_id,
                 risk_score=result.get("risk_score", 100),
@@ -391,6 +444,15 @@ async def process_lead_scan(task_id: int, domain: str, email: str, name: str,
                 risk_assessment=result.get("risk_assessment", []),
                 remediation_plan=result.get("remediation_plan", []),
             )
+
+        # Keep the client row in step with the report the cockpit serves:
+        # clients.risk_score/last_scan were never written after INSERT, so the
+        # row sat at 0 while every report said something else.
+        latest_report = await get_latest_report_by_domain(domain)
+        if latest_report:
+            await update_client_scan(client_db_id,
+                                     latest_report.get("risk_score", 100),
+                                     latest_report.get("raw_scan") or {})
 
         # Mark as hot if vulnerable, otherwise complete
         if result.get("risk_score", 100) < 80:
@@ -420,8 +482,8 @@ async def _dispatch_lead_scan(task_id: int, domain: str, email: str,
                               name: str) -> None:
     """Start (or re-start) a lead scan. The claim inside decides ownership."""
     signals = await get_lead_signals(domain)
-    asyncio.create_task(process_lead_scan(task_id, domain, email, name,
-                                          signals=signals))
+    await _await_or_spawn(process_lead_scan(task_id, domain, email, name,
+                                            signals=signals))
 
 
 async def recover_stale_lead_scans(limit: int = 5) -> int:
@@ -630,6 +692,136 @@ async def create_tripwire_checkout(client_id: str) -> Dict[str, str]:
     return {"url": session.url}
 
 
+# What each one-time unlock costs, in the currency the button charges.
+# The API re-checks the captured amount against THIS table: a browser that
+# edits its own JS cannot pay $0.01 for a $9.99 report.
+UNLOCK_PRICES = {"score": "1.99", "report": "9.99"}
+
+
+async def _paypal_get_order(order_id: str) -> Optional[Dict[str, Any]]:
+    """Fetches a checkout order from PayPal (server-to-server).
+
+    Returns the order JSON, or None when PayPal is unconfigured, unreachable,
+    or does not know the order (404). Nothing is granted without this.
+    """
+    client_id = os.getenv("PAYPAL_CLIENT_ID")
+    secret = os.getenv("PAYPAL_SECRET")
+    if not (client_id and secret):
+        return None
+
+    base = _paypal_api_base()
+    async with httpx.AsyncClient(timeout=15) as http:
+        token_resp = await http.post(
+            f"{base}/v1/oauth2/token",
+            auth=(client_id, secret),
+            data={"grant_type": "client_credentials"},
+            headers={"Accept": "application/json"},
+        )
+        if token_resp.status_code != 200:
+            return None
+        token = token_resp.json().get("access_token")
+
+        resp = await http.get(
+            f"{base}/v2/checkout/orders/{order_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+
+@app.post("/unlock/verify")
+async def verify_unlock(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Turns a captured PayPal order into a real, stored credit.
+
+    Called by the cockpit after onApprove. The browser is UNTRUSTED, so every
+    claim is re-checked here, server-to-server:
+
+      1. The order exists at PayPal (GET /v2/checkout/orders/{id}).
+      2. Its status is COMPLETED - captured, not merely approved.
+      3. The captured amount and currency equal this unlock's price.
+
+    Only then does a row land in `unlocks`. Replays of the same order are
+    idempotent (UNIQUE order_id), so a double-click cannot double-spend.
+    """
+    order_id = str(payload.get("order_id") or "").strip()
+    domain = sanitize_domain(str(payload.get("domain") or ""))
+    kind = str(payload.get("kind") or "").strip()
+
+    if not order_id or len(order_id) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", order_id):
+        return JSONResponse(status_code=400, content={"error": "Invalid order id"})
+    if not is_valid_domain(domain):
+        return JSONResponse(status_code=400, content={"error": "Invalid domain format"})
+    if kind not in UNLOCK_PRICES:
+        return JSONResponse(status_code=400, content={"error": "Unknown unlock kind"})
+
+    if not (os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_SECRET")):
+        print("[UNLOCK] verification not configured "
+              "(PAYPAL_CLIENT_ID / PAYPAL_SECRET) - refusing to grant")
+        return JSONResponse(status_code=503,
+                            content={"error": "payment verification is not configured"})
+
+    order = await _paypal_get_order(order_id)
+    if order is None:
+        return JSONResponse(status_code=404,
+                            content={"error": "PayPal does not know this order"})
+    if (order.get("status") or "").upper() != "COMPLETED":
+        return JSONResponse(status_code=409,
+                            content={"error": "Order is not captured"})
+
+    expected = UNLOCK_PRICES[kind]
+    captured_value = None
+    captured_currency = None
+    units = (order.get("purchase_units") or [{}])[0]
+    amount = units.get("amount") or {}
+    captured_value, captured_currency = amount.get("value"), amount.get("currency_code")
+    try:
+        matches = (Decimal(str(captured_value)) == Decimal(expected)
+                   and str(captured_currency).upper() == "USD")
+    except (InvalidOperation, ValueError):
+        matches = False
+    if not matches:
+        # Someone charged a different amount than this unlock costs.
+        print(f"[UNLOCK] REJECTED order {order_id}: expected {expected} USD, "
+              f"PayPal reports {captured_value} {captured_currency}")
+        return JSONResponse(status_code=409,
+                            content={"error": "Captured amount does not match this unlock"})
+
+    is_new = await record_unlock(order_id, domain, kind, expected)
+    credits = await get_unlock_credits(domain)
+    print(f"[UNLOCK] {'granted' if is_new else 'replayed'} {kind} for {domain} "
+          f"(order {order_id}, {expected} USD) - credits now {credits}")
+    return {"ok": True, "replay": not is_new, "kind": kind,
+            "domain": domain, "credits": credits}
+
+
+@app.get("/unlock/credits")
+async def unlock_credits(domain: str) -> Dict[str, Any]:
+    """Server-authoritative credit balance for a domain (never localStorage)."""
+    domain = sanitize_domain(domain)
+    if not is_valid_domain(domain):
+        return JSONResponse(status_code=400, content={"error": "Invalid domain format"})
+    return {"domain": domain, "credits": await get_unlock_credits(domain)}
+
+
+@app.post("/unlock/consume")
+async def unlock_consume(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Spends exactly one paid credit for this domain, atomically."""
+    domain = sanitize_domain(str(payload.get("domain") or ""))
+    kind = str(payload.get("kind") or "").strip()
+    if not is_valid_domain(domain):
+        return JSONResponse(status_code=400, content={"error": "Invalid domain format"})
+    if kind not in UNLOCK_PRICES:
+        return JSONResponse(status_code=400, content={"error": "Unknown unlock kind"})
+    spent = await consume_unlock(domain, kind)
+    credits = await get_unlock_credits(domain)
+    if not spent:
+        return JSONResponse(status_code=402,
+                            content={"error": "No paid unlock left for this domain",
+                                     "credits": credits})
+    return {"ok": True, "kind": kind, "domain": domain, "credits": credits}
+
+
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request) -> Dict[str, Any]:
     """
@@ -638,14 +830,30 @@ async def stripe_webhook(request: Request) -> Dict[str, Any]:
     """
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 
-    # 1. Verify Signature
+    # 0. Verification must be possible before it can be trusted. Without the
+    #    endpoint secret every signature check would be vacuous, so refuse the
+    #    event loudly instead of accepting whatever arrives.
+    if not webhook_secret:
+        print("[STRIPE] STRIPE_WEBHOOK_SECRET is not set - refusing webhook (config error)")
+        return JSONResponse(status_code=503,
+                            content={"error": "webhook verification is not configured"})
+
+    # 1. Verify Signature - a forged or malformed event is rejected with 400,
+    #    never 200 (so Stripe stops retrying it) and never 500 (no crash).
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, os.getenv("STRIPE_WEBHOOK_SECRET"))
-    except ValueError as e:
-        return {"error": f"Invalid payload: {str(e)}"}
-    except WebhookSignatureVerificationError as e:
-        return {"error": f"Invalid signature: {str(e)}"}
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "Invalid payload"})
+    except STRIPE_SIGNATURE_ERROR:
+        return JSONResponse(status_code=400, content={"error": "Invalid signature"})
+
+    # The real SDK hands back a StripeObject (attribute/subscript access only,
+    # no .get); tests hand back a plain dict. Normalise once here so every
+    # branch below works on the real payload instead of crashing on it.
+    if hasattr(event, "to_dict"):
+        event = event.to_dict()
 
     # 2. Idempotency Check (Prevent duplicate processing)
     event_id = event["id"]
@@ -665,26 +873,76 @@ async def stripe_webhook(request: Request) -> Dict[str, Any]:
         plan = data_object.get("metadata", {}).get("plan", "monthly")
 
         if client_id:
+            # Remember the Stripe subscription id: invoice events below carry
+            # only that id, so this link is how a failed payment finds its client.
+            stripe_sub = data_object.get("subscription")
+            if isinstance(stripe_sub, str) and stripe_sub:
+                await link_stripe_subscription(client_id, stripe_sub)
             await activate_subscription(client_id, plan)
             print(f"[STRIPE] Subscription activated for {client_id} ({plan})")
 
     elif event_type == "customer.subscription.updated":
         subscription = data_object
         client_id = _coerce_client_id(subscription.get("metadata", {}).get("client_id"))
+        if client_id is None and isinstance(subscription.get("id"), str):
+            client_id = await get_client_id_by_stripe_subscription(subscription["id"])
 
         if client_id:
-            # Handle plan changes, etc.
-            current_plan = subscription.get("plan", {}).get("id", "monthly")
-            await activate_subscription(client_id, current_plan)
-            print(f"[STRIPE] Subscription updated for {client_id} ({current_plan})")
+            # The provider's own status decides ours - never the other way round.
+            provider_status = (subscription.get("status") or "").lower()
+            if provider_status in ("active", "trialing"):
+                current_plan = subscription.get("plan", {}).get("id", "monthly")
+                await activate_subscription(client_id, current_plan)
+                print(f"[STRIPE] Subscription updated for {client_id} ({current_plan})")
+            else:
+                # past_due / unpaid / canceled all mean: not a paying customer.
+                await deactivate_subscription(client_id)
+                print(f"[STRIPE] Subscription {provider_status or 'inactive'} for "
+                      f"{client_id}. Deactivated; win-back queued for 30-day cron.")
 
     elif event_type == "customer.subscription.deleted":
         client_id = _coerce_client_id(data_object.get("metadata", {}).get("client_id"))
+        if client_id is None and isinstance(data_object.get("id"), str):
+            client_id = await get_client_id_by_stripe_subscription(data_object["id"])
         if client_id:
             await deactivate_subscription(client_id)
             # The lifecycle win-back is sent ONLY by win_back_cron.py after the
             # 30-day silence period (never immediately after cancellation).
             print(f"[STRIPE] Subscription cancelled for {client_id}. Win-back queued for 30-day cron.")
+
+    elif event_type == "invoice.payment_failed":
+        # A card that did not charge: the subscription stops being 'active', so
+        # subscriber-only surfaces go dark instead of showing a paid state.
+        invoice = data_object
+        client_id = _coerce_client_id(invoice.get("metadata", {}).get("client_id"))
+        if client_id is None:
+            sub_id = invoice.get("parent", {}).get("subscription_details", {}) \
+                .get("subscription") if isinstance(invoice.get("parent"), dict) else None
+            sub_id = sub_id or invoice.get("subscription")
+            if isinstance(sub_id, str) and sub_id:
+                client_id = await get_client_id_by_stripe_subscription(sub_id)
+        if client_id:
+            await deactivate_subscription(client_id)
+            print(f"[STRIPE] Payment failed for {client_id}. Deactivated; "
+                  "win-back queued for 30-day cron.")
+        else:
+            print("[STRIPE] invoice.payment_failed for an unlinked subscription "
+                  f"({invoice.get('id')}) - no client to update, recorded only.")
+
+    elif event_type == "invoice.paid":
+        # A previously failed invoice that went through: the provider says the
+        # money arrived, so the subscription becomes active again.
+        invoice = data_object
+        client_id = _coerce_client_id(invoice.get("metadata", {}).get("client_id"))
+        if client_id is None:
+            sub_id = invoice.get("parent", {}).get("subscription_details", {}) \
+                .get("subscription") if isinstance(invoice.get("parent"), dict) else None
+            sub_id = sub_id or invoice.get("subscription")
+            if isinstance(sub_id, str) and sub_id:
+                client_id = await get_client_id_by_stripe_subscription(sub_id)
+        if client_id:
+            await activate_subscription(client_id, "monthly")
+            print(f"[STRIPE] Invoice paid for {client_id}. Subscription active again.")
 
     return {"received": True}
 
@@ -1102,7 +1360,7 @@ async def get_public_report(domain: str) -> Dict[str, Any]:
 
     # Trigger a background scan (public visitor - no email collected)
     task_id = await create_lead_task(domain, "", "Public Visitor")
-    asyncio.create_task(process_lead_scan(task_id, domain, "", "Public Visitor"))
+    await _await_or_spawn(process_lead_scan(task_id, domain, "", "Public Visitor"))
     return {"status": "scanning", "task_id": task_id}
 
 
@@ -1390,12 +1648,141 @@ async def business_get_output(project_id: int, skill_id: str) -> Any:
     return output
 
 
+@app.get("/api/ops/summary")
+async def ops_summary() -> Any:
+    """Cockpit metrics: every number aggregated from live tables, none cached,
+    none invented. Counts only - no addresses, no report contents."""
+    from main import LLM_CONFIGURED
+    pool = await get_pool()
+    out: Dict[str, Any] = {}
+    async with pool.acquire() as conn:
+        leads = await conn.fetchrow(
+            "SELECT count(*) AS total, "
+            " count(*) FILTER (WHERE status IN ('completed','hot')) AS scanned, "
+            " count(*) FILTER (WHERE status = 'failed') AS failed, "
+            " count(*) FILTER (WHERE status = 'suppressed') AS suppressed, "
+            " count(*) FILTER (WHERE status IN ('pending','running')) AS in_progress, "
+            " count(*) FILTER (WHERE jsonb_array_length(coalesce(metadata->'signals','[]'::jsonb)) > 0) "
+            "   AS qualified, "
+            " max(updated_at) AS last_activity "
+            "FROM lead_tasks")
+        out["leads"] = {k: (v if hasattr(v, "isoformat") else int(v))
+                        for k, v in dict(leads).items()}
+
+        reports = await conn.fetchrow("SELECT count(*) AS reports FROM reports")
+        out["reports"] = int(reports["reports"])
+
+        stages = await conn.fetch(
+            "SELECT stage, count(*) AS sends, count(DISTINCT lead_id) AS leads "
+            "FROM lead_stages GROUP BY stage ORDER BY stage")
+        out["stages"] = {r["stage"]: {"sends": int(r["sends"]),
+                                       "leads": int(r["leads"])} for r in stages}
+        out["emails_accepted"] = sum(v["sends"] for v in out["stages"].values())
+
+        reasons = await conn.fetch(
+            "SELECT coalesce(metadata->>'reason', 'unknown') AS reason, count(*) AS n "
+            "FROM lead_tasks WHERE status = 'suppressed' GROUP BY 1")
+        out["suppression"] = {r["reason"]: int(r["n"]) for r in reasons}
+
+        failed_tasks = await conn.fetchrow(
+            "SELECT count(*) AS n FROM lead_tasks WHERE status = 'failed'")
+        try:
+            scan_failed = await conn.fetchrow(
+                "SELECT count(*) AS n FROM scan_tasks WHERE status = 'failed'")
+            out["failed_scans"] = int(scan_failed["n"])
+        except Exception:
+            out["failed_scans"] = 0
+        out["failed_jobs"] = int(failed_tasks["n"])
+
+        try:
+            active_subs = await conn.fetchrow(
+                "SELECT count(*) AS n FROM subscriptions WHERE status = 'active'")
+            out["customers"] = int(active_subs["n"])
+        except Exception:
+            out["customers"] = 0
+
+    sender = ("sendgrid" if os.getenv("SENDGRID_API_KEY")
+              else "resend" if os.getenv("RESEND_API_KEY") else None)
+    holds = []
+    if not sender:
+        holds.append("no email provider key configured - outreach HOLD")
+    if not os.getenv("GROQ_API_KEY"):
+        holds.append("GROQ_API_KEY missing - analysis cannot run")
+    out["health"] = {
+        "llm_configured": bool(LLM_CONFIGURED),
+        "email_sender": sender,
+        "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je"),
+        "inline_scan": INLINE_SCAN,
+        "holds": holds,
+    }
+    out["not_tracked"] = [
+        "replies / conversations (Reply-To lands in a monitored mailbox; no inbound-parse route is configured yet)",
+        "bounces arrive via SendGrid suppression sync on each cron batch, not in real time",
+    ]
+    return out
+
+
+@app.get("/unsubscribe")
+async def unsubscribe(lead: int, token: str) -> Any:
+    """One-click opt-out. Token is HMAC-bound to this lead only.
+
+    Suppressing the lead stops every future stage (the engine's source query
+    excludes suppressed rows) and blocks re-capture with the same address.
+    """
+    from utils import verify_unsubscribe_token
+    from db import suppress_lead
+    if not verify_unsubscribe_token(lead, token):
+        return JSONResponse(status_code=403,
+                            content={"error": "invalid unsubscribe token"})
+    await suppress_lead(lead, "unsubscribed")
+    print(f"[UNSUBSCRIBE] lead {lead} opted out")
+    return {"status": "unsubscribed", "lead": lead}
+
+
+@app.post("/internal/run-batch")
+async def internal_run_batch(x_cron_token: str = Header(default="")) -> Any:
+    """Drive the outbound engine when there is no long-lived worker process.
+
+    Called by the external cron (GitHub Actions) with X-Cron-Token. One
+    bounded batch per call: sends whatever is due under the daily cap, then
+    reclaims stranded scans. Idle jitter is compressed because the HTTP
+    caller has a deadline; pacing across the day comes from the cron
+    schedule and the per-stage day gates in the engine.
+    """
+    import hmac as _hmac
+    if not CRON_SECRET or not _hmac.compare_digest(CRON_SECRET, x_cron_token):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    from outbound_engine import OutboundEngine
+    engine = OutboundEngine()
+    engine.jitter_min = int(os.getenv("BATCH_JITTER_MIN", "3"))
+    engine.jitter_max = int(os.getenv("BATCH_JITTER_MAX", "8"))
+    sent = await engine.process_batch()
+    resumed = await recover_stale_lead_scans()
+    return {"status": "ok", "sent": sent,
+            "sent_today": engine.emails_sent_today,
+            "resumed_scans": resumed,
+            "circuit_open": engine.circuit_breaker_active}
+
+
 @app.get("/health")
 async def health_check() -> Dict[str, Any]:
-    """Health check: process liveness plus whether the LLM is configured."""
+    """Health check: process liveness plus what the product actually depends on.
+
+    `email_sender` is deliberately part of the answer: with no voice provider
+    configured the outbound engine cannot send, and an operator must be able to
+    see that from /health instead of discovering it in the worker's logs.
+    Only configuration *state* is reported - never a key.
+    """
     from main import LLM_CONFIGURED
+    sender = None
+    if os.getenv("SENDGRID_API_KEY"):
+        sender = "sendgrid"
+    elif os.getenv("RESEND_API_KEY"):
+        sender = "resend"
     return {"status": "healthy", "service": "zero-trust-sentinel",
-            "llm_configured": bool(LLM_CONFIGURED)}
+            "llm_configured": bool(LLM_CONFIGURED),
+            "email_sender": sender,
+            "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")}
 
 
 @app.exception_handler(Exception)

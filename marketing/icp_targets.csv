@@ -1,0 +1,20 @@
+domain,industry,estimated_risk_score
+resend.com,Developer Infrastructure,58
+posthog.com,Productivity SaaS,47
+cal.com,Productivity SaaS,52
+clerk.com,Developer Infrastructure,61
+browserbase.com,Developer Infrastructure,57
+trigger.dev,Developer Infrastructure,49
+dub.co,Developer Infrastructure,54
+plain.com,Collaboration SaaS,63
+hoppscotch.com,Developer Tools,66
+northflank.com,Developer Infrastructure,59
+aikido.dev,B2B SaaS / Security,44
+lago.dev,B2B SaaS / Usage Billing,55
+val.town,Developer Tools,60
+railway.app,Developer Infrastructure,62
+vapi.ai,AI Infrastructure,47
+buildkite.com,Developer Infrastructure,51
+paddle.com,B2B SaaS / Payments,56
+chargebee.com,B2B SaaS / Billing,53
+postmarkapp.com,Developer Infrastructure,48

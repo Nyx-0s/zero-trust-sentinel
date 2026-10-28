@@ -1,0 +1,32 @@
+# The Voice: one permission-based follow-up batch per tick.
+#
+# The Body runs on Vercel, whose Hobby plan cannot host a long-lived process,
+# so the always-on worker's engine loop (worker.sh) is replaced by this
+# scheduled job: RUN_ONCE=1 processes what is due and exits. Stage gating
+# (lead_stages) and the DB-seeded daily cap keep the volume permission-based
+# no matter how many ticks run.
+name: outbound-engine
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly, offset from the hour to avoid the top-of-hour rush
+  workflow_dispatch:
+
+concurrency:
+  group: outbound-engine
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Run one outbound batch on the Body
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        # The engine runs inside the API process (no worker on Vercel Hobby):
+        # the tick is a token-guarded POST, not a second Python runtime.
+        run: |
+          curl -sS --fail-with-body --max-time 300 \
+            -X POST "$SITE_URL/internal/run-batch" \
+            -H "X-Cron-Token: $CRON_SECRET"

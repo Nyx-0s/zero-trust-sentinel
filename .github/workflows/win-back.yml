@@ -1,0 +1,36 @@
+# Daily lifecycle pass: 30-day win-back for churned subscribers.
+# worker.sh ran this in a loop (sleep 86400); the schedule replaces that.
+name: win-back-daily
+on:
+  schedule:
+    - cron: "26 6 * * *"   # once a day (Vercel Hobby cron is daily-only; this is the CI twin)
+  workflow_dispatch:
+
+concurrency:
+  group: win-back-daily
+  cancel-in-progress: false
+
+jobs:
+  win-back:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the win-back pass
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          PUBLIC_API_URL: ${{ secrets.SITE_URL }}
+        run: python win_back_cron.py

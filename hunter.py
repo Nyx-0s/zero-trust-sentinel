@@ -38,11 +38,18 @@ import httpx
 
 # The Face (static InfinityFree hosting) cannot accept POST /capture - leads
 # must be ingested by the Body, which owns the API and the database.
-API_URL = "https://zero-trust-sentinel--onthecontraryan.replit.app"
+# SITE_URL is whatever the deployment actually serves; the old Replit body is
+# gone, so a fresh clone must never post leads at a dead host.
+API_URL = os.getenv("SITE_URL") or "https://zerodaysentinel.xo.je"
 UA = "Zero-Trust-Sentinel-Hunter/1.0 (public-surface discovery; GET-only)"
 API_PATHS = ["/docs", "/api", "/swagger", "/swagger-ui/", "/openapi.json", "/api/docs"]
 STAGING_PREFIXES = ["staging", "dev", "test", "uat"]
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+# Public contact routes we will accept as a lead's email, in order of trust.
+# Only addresses literally printed on the prospect's own pages qualify -
+# never guessed patterns (info@, sales@ are inventions, not discoveries).
+CONTACT_PATHS = ["/", "/contact", "/contact-us", "/about", "/support"]
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -131,6 +138,56 @@ def detect_signals(client: httpx.Client, domain: str) -> Tuple[List[str], Dict[s
     return signals, evidence
 
 
+def find_contact_email(client: httpx.Client, domain: str,
+                        homepage_html: str = "") -> Tuple[str, str]:
+    """Find a publicly published business contact for the domain.
+
+    Walks the prospect's own pages (/, /contact, /about) and returns the first
+    mailbox that is literally printed there, plus the URL that printed it.
+    Never guesses addresses: if the site publishes none, returns ("", "").
+    A lead with no published contact is still scanned and reported - it just
+    is never mailed.
+    """
+    seen_pages = {"/": homepage_html} if homepage_html else {}
+    email_re = re.compile(r"[A-Za-z0-9._%+-]+@" + re.escape(domain) + r"\b")
+    mailto_re = re.compile(r"mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+                           re.I)
+
+    def _pick(page_url: str, html: str) -> Optional[Tuple[str, str]]:
+        m = mailto_re.search(html)
+        if m:
+            return m.group(1).lower(), page_url
+        m = email_re.search(html)
+        if m:
+            addr = m.group(0).lower()
+            # Role boxes only - never a personal-looking address scraped from
+            # a page (keeps outreach on published, role-based routes).
+            local = addr.split("@", 1)[0]
+            if local in ("info", "contact", "hello", "security", "support",
+                         "team", "admin", "sales", "partners", "press"):
+                return addr, page_url
+        return None
+
+    for path, html in list(seen_pages.items()):
+        hit = _pick(f"https://{domain}{path}", html)
+        if hit:
+            return hit
+
+    for path in CONTACT_PATHS:
+        if path in seen_pages:
+            continue
+        try:
+            r = client.get(f"https://{domain}{path}", timeout=10)
+        except httpx.HTTPError:
+            continue
+        if r.status_code == 200 and "html" in (r.headers.get("content-type") or "").lower():
+            hit = _pick(str(r.url), r.text)
+            if hit:
+                return hit
+        time.sleep(0.3)
+    return "", ""
+
+
 # --- Groq ICP qualification --------------------------------------------------
 
 def groq_qualify(client: httpx.Client, api_key: str, industry: str,
@@ -166,7 +223,8 @@ def groq_qualify(client: httpx.Client, api_key: str, industry: str,
 # --- Submission (harvey_discovery.md field contract) -------------------------
 
 def submit(api_base: str, domain: str, signals: List[str],
-           harvey_ref: str) -> Tuple[bool, str]:
+           harvey_ref: str, email: str = "",
+           evidence: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     """POST /capture with an honest contract.
 
     Only HTTP 200 *with* a scan_id is an ingest. A 3xx (Replit's 307 shield),
@@ -175,12 +233,19 @@ def submit(api_base: str, domain: str, signals: List[str],
     Returns (ok, detail).
     """
     url = f"{api_base.rstrip('/')}/capture"
+    payload: Dict[str, Any] = {
+        "domain": domain, "email": email, "name": "Discovered by Hunter",
+        "signals": signals, "harvey_ref": harvey_ref,
+    }
+    if evidence:
+        payload["evidence"] = evidence
     try:
         r = httpx.post(
             url,
-            json={"domain": domain, "email": "", "name": "Discovered by Hunter",
-                  "signals": signals, "harvey_ref": harvey_ref},
-            timeout=30,
+            json=payload,
+            # Inline scans run inside this call (Vercel has no detached
+            # tasks): recon + LLM analysis can take a couple of minutes.
+            timeout=300,
         )
     except httpx.HTTPError as exc:
         return False, f"API unreachable or shielded: {type(exc).__name__}: {exc}"
@@ -250,13 +315,20 @@ def main() -> int:
             ref_seq += 1
             harvey_ref = f"hv-{date.today().isoformat()}-{ref_seq:03d}"
             proof = evidence.get("exposed_api_url") or evidence.get("staging_host") or "-"
+            contact, contact_source = find_contact_email(
+                client, domain, evidence.get("homepage_text", ""))
+            if contact_source:
+                evidence["contact_source"] = contact_source
             print(f"  {domain:<16} QUALIFIED   signals={signals} proof={proof}")
+            print(f"      contact: {contact or '(none published - scan only, never mailed)'}"
+                  + (f" via {contact_source}" if contact_source else ""))
             if args.dry_run:
                 print(f"      (dry run) would POST {args.api}/capture "
                       f"domain={domain} signals={signals} ref={harvey_ref}")
             else:
                 try:
-                    ok, detail = submit(args.api, domain, signals, harvey_ref)
+                    ok, detail = submit(args.api, domain, signals, harvey_ref,
+                                        email=contact, evidence=evidence)
                 except Exception as exc:  # a submit must never crash the hunt
                     ok, detail = (False,
                                   f"API unreachable or shielded: "

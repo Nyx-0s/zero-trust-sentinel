@@ -3,21 +3,21 @@
 
 The Autopilot is split across two hosts, so this probes both:
 
-  Body (the API, Replit):
-  1. GET  /health          -> publicly reachable (not Replit's 307 shield)
+  Body (the API, Vercel):
+  1. GET  /health          -> publicly reachable (not a hosting auth shield)
   2. POST /capture         -> the Brain can ingest (200 + scan_id)
   3. GET  /task/{id}       -> the pipeline reaches 'completed'/'hot'
   4. GET  /                -> the cockpit HTML ships the Digital Twin card
 
   Face (the marketing site, InfinityFree static hosting):
   5. GET  /                -> serves the landing page AND its assessment form
-                              is wired to the Body (API_BASE -> replit.app)
+                              is wired to the Body (API_BASE -> vercel.app)
 
 Prints GO-LIVE (exit 0) when every limb answers, otherwise HOLD (exit 1) and
 names the limb that is dead.
 
     python3 verify_live.py
-    python3 verify_live.py --api https://zero-trust-sentinel--onthecontraryan.replit.app
+    python3 verify_live.py --api https://zero-trust-sentinel-opal.vercel.app
     python3 verify_live.py --face https://zerodaysentinel.xo.je --timeout 420
 """
 
@@ -38,7 +38,8 @@ DEAD = {"failed", "error", "suppressed"}
 
 
 def shielded(resp: httpx.Response) -> bool:
-    """Replit answers anonymous traffic with 307 -> __replshield -> silent-auth."""
+    """A host that answers anonymous traffic with a 307 auth redirect (the
+    legacy Replit shield pattern, kept for old deployments)."""
     if resp.status_code not in (301, 302, 303, 307, 308):
         return False
     loc = (resp.headers.get("location") or "").lower()
@@ -51,19 +52,19 @@ def check_health(client: httpx.Client, site: str):
     except httpx.HTTPError as exc:
         return False, f"unreachable: {type(exc).__name__}: {exc}"
     if shielded(r):
-        return False, (f"HTTP {r.status_code} -> Replit auth shield. The Body is "
+        return False, (f"HTTP {r.status_code} -> auth shield. The Body is "
                        "PRIVATE; set the deployment to public visibility.")
     if r.status_code == 404:
         return False, ("HTTP 404 - nothing serves /health here. The static Face "
-                       "cannot answer; point --api at the Replit Body "
-                       "(https://zero-trust-sentinel--onthecontraryan.replit.app).")
+                       "cannot answer; point --api at the Vercel Body "
+                       "(https://zero-trust-sentinel-opal.vercel.app).")
     if r.status_code != 200:
         return False, f"HTTP {r.status_code} from /health"
     try:
         body = r.json()
     except ValueError:
         return False, (f"/health returned non-JSON (static host?): "
-                       f"{r.text[:80]!r} - pass --api <replit-body-url>")
+                       f"{r.text[:80]!r} - pass --api <body-url>")
     if body.get("status") != "healthy":
         return False, f"/health says {body.get('status')!r}, expected 'healthy'"
     return True, f"HTTP 200 {body}"
@@ -82,7 +83,7 @@ def check_capture(client: httpx.Client, site: str):
     except httpx.HTTPError as exc:
         return False, None, f"unreachable: {type(exc).__name__}: {exc}"
     if shielded(r):
-        return False, None, (f"HTTP {r.status_code} -> Replit auth shield; "
+        return False, None, (f"HTTP {r.status_code} -> auth shield; "
                              "the Brain cannot reach /capture.")
     try:
         body = r.json()
@@ -110,7 +111,7 @@ def check_task(client: httpx.Client, site: str, scan_id: int, timeout: int):
         except httpx.HTTPError as exc:
             return False, f"poll failed: {type(exc).__name__}: {exc}"
         if shielded(r):
-            return False, f"HTTP {r.status_code} -> Replit auth shield mid-poll"
+            return False, f"HTTP {r.status_code} -> auth shield mid-poll"
         if r.status_code == 200:
             try:
                 body = r.json()
@@ -132,7 +133,7 @@ def check_cockpit(client: httpx.Client, api: str):
     except httpx.HTTPError as exc:
         return False, f"unreachable: {type(exc).__name__}: {exc}"
     if shielded(r):
-        return False, f"HTTP {r.status_code} -> Replit auth shield; the cockpit is private"
+        return False, f"HTTP {r.status_code} -> auth shield; the cockpit is private"
     if r.status_code != 200:
         return False, f"HTTP {r.status_code} from /"
     page = r.text
@@ -189,7 +190,7 @@ def check_face(client: httpx.Client, face: str, api: str):
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zero-Trust Sentinel GO-LIVE probe")
     ap.add_argument("--api", "--site", dest="api",
-                    default="https://zero-trust-sentinel--onthecontraryan.replit.app",
+                    default="https://zero-trust-sentinel-opal.vercel.app",
                     help="Base URL of the Body/API (default: %(default)s)")
     ap.add_argument("--face",
                     default="https://zerodaysentinel.xo.je",

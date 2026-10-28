@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import random
 from datetime import datetime
@@ -16,7 +17,9 @@ from db import (
     get_latest_report_by_domain,
     mark_stage_sent,
     has_stage_sent,
+    count_sends_today,
 )
+from utils import unsubscribe_token
 
 MAX_EMAILS_PER_DAY = int(os.getenv("MAX_EMAILS_PER_DAY", "20"))
 # Voice provider: SendGrid is preferred because its domain auth is CNAME-only
@@ -26,6 +29,37 @@ SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 # Set FROM_EMAIL to a sender on the verified domain.
 FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")
+# Replies must land in a monitored inbox. zerodaysentinel.xo.je has no MX, so
+# Reply-To points at the operator's real mailbox; a prospect's answer reaches
+# a human instead of a black hole.
+REPLY_TO = os.getenv("REPLY_TO", "aryan.ahlawat@rftsystems.com")
+# Where API links in emails point (reports, unsubscribe). Falls back to SITE_URL.
+PUBLIC_API_URL = (os.getenv("PUBLIC_API_URL") or os.getenv("SITE_URL")
+                  or "https://zerodaysentinel.xo.je").rstrip("/")
+# Set to "1" by cron/CI: process what is due and exit instead of looping,
+# so a scheduled job cannot outlive its invocation window.
+RUN_ONCE = os.getenv("RUN_ONCE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _report_items(value):
+    """Normalize a report column to a list of findings/steps.
+
+    risk_assessment and remediation_plan are JSONB: depending on how the row
+    was read they can arrive as a real list, a JSON string (a connection
+    without the jsonb codec), or None. Email building must never crash on
+    shape - a string would otherwise be indexed as if it were the list and
+    `risks[0]` becomes a single character.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return []
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return value
+    return []
 
 
 class OutboundEngine:
@@ -34,6 +68,8 @@ class OutboundEngine:
         self.last_reset_date = datetime.now().date()
         self.consecutive_failures = 0
         self.circuit_breaker_active = False
+        # Short-lived cron runs seed the daily counter from the DB once.
+        self._seeded_daily = False
         # Permission-based sending: low daily cap protects domain reputation
         self.MAX_DAILY_LIMIT = MAX_EMAILS_PER_DAY
         # Jitter between sends (tunable for tests / warm-up)
@@ -41,7 +77,12 @@ class OutboundEngine:
         self.jitter_max = int(os.getenv("JITTER_MAX_SECONDS", "120"))
 
     async def _send_email(self, to_email: str, name: str, subject: str, body: str) -> bool:
-        """Sends a permission-based email with circuit-breaker logic."""
+        """Sends a permission-based email with circuit-breaker logic.
+
+        Returns True ONLY when the provider accepted the message (SendGrid
+        answers 202). Anything else - 4xx, 5xx, transport error - is a
+        failure and the caller must not record a stage as sent.
+        """
         if self.circuit_breaker_active:
             print("[CIRCUIT BREAKER] Suppressing email send.")
             return False
@@ -57,10 +98,21 @@ class OutboundEngine:
             headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}"}
             payload = {
                 "personalizations": [{"to": [{"email": to_email}]}],
-                "from": {"email": FROM_EMAIL},
+                "from": {"email": FROM_EMAIL, "name": "Zero-Trust Sentinel"},
+                "reply_to": {"email": REPLY_TO},
                 "subject": subject,
                 "content": [{"type": "text/html", "value": html}],
+                "tracking_settings": {
+                    # Opens/clicks are not our opt-out contract; the unsubscribe
+                    # link is. Keeping them off also keeps the mail honest.
+                    "open_tracking": {"enable": False},
+                    "click_tracking": {"enable": False},
+                },
+                "asm": {"group_id": int(os.getenv("SENDGRID_ASM_GROUP", "0"))}
+                if os.getenv("SENDGRID_ASM_GROUP") else {},
             }
+            if not payload["asm"]:
+                payload.pop("asm")
         else:
             url = "https://api.resend.com/emails"
             headers = {"Authorization": f"Bearer {RESEND_API_KEY}"}
@@ -85,7 +137,12 @@ class OutboundEngine:
                 return True
 
             self.consecutive_failures += 1
-            print(f"[EMAIL FAIL] {to_email}: {response.status_code}")
+            # The provider's own reason (Resend's 403 "domain not verified",
+            # SendGrid's 403 permissions error, ...) is the only thing that
+            # tells an operator what to actually fix, so keep it in the log:
+            # truncated, single-line, and never the API key.
+            reason = (response.text or "").strip().replace("\n", " ")[:300]
+            print(f"[EMAIL FAIL] {to_email}: {response.status_code} {reason}")
 
             # Circuit Breaker: 3 consecutive failures -> pause 1 hour
             # (stricter threshold protects a new domain's reputation)
@@ -129,6 +186,15 @@ class OutboundEngine:
         """
         sent = 0
 
+        # Short-lived callers (the /internal/run-batch cron, RUN_ONCE CI runs)
+        # start with an empty in-memory counter; seed it once from today's real
+        # sends or the daily cap would grant the full allowance on every call.
+        if not self._seeded_daily:
+            self.emails_sent_today = await count_sends_today()
+            self._seeded_daily = True
+            print(f"[INFO] daily cap seeded from DB: "
+                  f"{self.emails_sent_today} sent today")
+
         # 1. Load Inbound Leads (Opted-in via /capture)
         leads = await get_inbound_leads(limit=20)
 
@@ -162,6 +228,8 @@ class OutboundEngine:
             else:
                 continue  # Win-back handled by separate 30-day cron
 
+            body = self._footer(lead["id"], body)
+
             success = await self._send_email(email, name, subject, body)
 
             if success:
@@ -177,79 +245,109 @@ class OutboundEngine:
     async def run_loop(self):
         """
         Main loop: Follow-up sequences for inbound leads.
+
+        RUN_ONCE=1 (set by the cron driver) processes exactly one batch and
+        returns, so the process never outlives a scheduled invocation.
         """
-        print("[INFO] Inbound Follow-Up Engine Started.")
+        print("[INFO] Inbound Follow-Up Engine Started." + (" (single pass)" if RUN_ONCE else ""))
         while True:
             self._reset_daily_counter()
 
             if self.emails_sent_today >= self.MAX_DAILY_LIMIT:
                 print(f"[INFO] Daily limit ({self.MAX_DAILY_LIMIT}) reached. Sleeping.")
+                if RUN_ONCE:
+                    return
                 await asyncio.sleep(3600)
                 continue
 
-            await self.process_batch()
+            n = await self.process_batch()
+            print(f"[INFO] batch complete: {n} provider-accepted send(s)")
 
+            if RUN_ONCE:
+                return
             await asyncio.sleep(600)
 
-    def _build_initial_email(self, domain: str, name: str, report: dict) -> tuple:
-        """Initial email: The 'Free Scan' delivery."""
-        risks = report.get("risk_assessment", [])
-        top_risk = risks[0] if risks else {"title": "General Posture", "business_impact": "Standard monitoring recommended"}
+    @staticmethod
+    def _footer(lead_id: int, body: str) -> str:
+        """Every outbound message carries a working one-click opt-out.
 
-        subject = f"Your risk assessment for {domain} is ready"
+        The link targets the API (the Face is static and cannot serve
+        /unsubscribe), and the token is bound to this lead only.
+        """
+        unsub = f"{PUBLIC_API_URL}/unsubscribe?lead={int(lead_id)}&token={unsubscribe_token(lead_id)}"
+        return (f"{body}\n\n---\n"
+                f"You are receiving this because your business publishes this "
+                f"address and our public-surface assessment applies to your "
+                f"domain. Opt out any time (no form, one click): {unsub}\n"
+                f"Zero-Trust Sentinel - external attack-surface monitoring")
+
+    def _build_initial_email(self, domain: str, name: str, report: dict) -> tuple:
+        """Initial email: the real report, honestly described."""
+        risks = [r for r in _report_items(report.get("risk_assessment"))
+                 if isinstance(r, dict)]
+        top_risk = risks[0] if risks else {"title": "General Posture",
+                                           "business_impact": "Standard monitoring recommended"}
+        report_url = f"{PUBLIC_API_URL}/report/{domain}"
+
+        subject = f"Public-surface assessment for {domain}"
         body = f"""Hi {name},
 
-You requested a security posture check for {domain}.
+We ran a passive, public-surface assessment of {domain} - no login, no
+exploitation, only what anyone can observe from the outside.
 
-**Risk Score:** {report.get('risk_score', 100)}/100
-**Top Finding:** {top_risk.get('title')}
-**Business Impact:** {top_risk.get('business_impact')}
+Risk score: {report.get('risk_score', 100)}/100
+Top finding: {top_risk.get('title')}
+Business impact: {top_risk.get('business_impact')}
 
-[View Full Report] (Link to your dashboard)
+Full report (no gating): {report_url}
 
-If you want to keep this monitoring active, we offer a $49/mo service.
+If you want this surface watched continuously - new subdomains, TLS drift,
+exposed staging - we run that for $49/mo. Happy to walk through the findings
+first; just reply to this email.
 
 Best,
-[Your Name]
 Zero-Trust Sentinel
-"""
+Automated external attack-surface monitoring"""
         return subject, body
 
     def _build_follow_up_1(self, domain: str, name: str, report: dict) -> tuple:
         """Follow-up 1: The 'Value Add' (Day 2-3)."""
-        subject = f"Quick tip for {domain}'s security posture"
-        remediation = report.get('remediation_plan', [{}])[0].get('steps', ['Review your DNS records'])[0]
+        report_url = f"{PUBLIC_API_URL}/report/{domain}"
+        subject = f"Quick win for {domain}"
+        plan = [p for p in _report_items(report.get("remediation_plan"))
+                if isinstance(p, dict)]
+        steps = plan[0].get("steps") if plan else None
+        remediation = (steps[0] if steps else "Review your DNS records")
         body = f"""Hi {name},
 
-Following up on your {domain} assessment.
+Following up on the {domain} assessment (report: {report_url}).
 
-One quick win: {remediation}
+One quick win from it: {remediation}
 
-This takes about 5 minutes and can reduce your risk score.
-
-[View Full Report]
+That is about five minutes of work and it moves the score. The rest of the
+findings are in the report.
 
 Best,
-[Your Name]
-"""
+Zero-Trust Sentinel"""
         return subject, body
 
     def _build_follow_up_2(self, domain: str, name: str, report: dict) -> tuple:
-        """Follow-up 2: The 'Last Call' (Day 5-7)."""
-        subject = f"Closing the loop on {domain}"
+        """Follow-up 2: The 'Last Call' (Day 5-7). One email, then silence."""
+        report_url = f"{PUBLIC_API_URL}/report/{domain}"
+        subject = f"Last note on the {domain} assessment"
         body = f"""Hi {name},
 
-I don't want to clutter your inbox.
+Last email from us about {domain} - the assessment stays here either way:
+{report_url}
 
-Your risk assessment for {domain} is still available here: [View Full Report]
+If continuous monitoring matters, reply and we will set up the first 72 hours
+free so you can see the feed before any money changes hands ($49/mo after).
 
-If you're interested in automated monitoring, we're offering First 72 Hours Free - Black October Emergency Monitoring, then $49/mo.
-
-If now isn't the right time, no worries. I'll stop emailing you.
+If not, no worries: the opt-out link below stops all future email and we
+will not write again.
 
 Best,
-[Your Name]
-"""
+Zero-Trust Sentinel"""
         return subject, body
 
 
@@ -295,7 +393,9 @@ if __name__ == "__main__":
     async def _start() -> None:
         # Prove the Voice can send FIRST, and gate lead mail on that proof:
         # without GO every follow-up this process attempts would bounce.
-        if not await engine.resend_health_check():
+        # RUN_ONCE cron runs skip the probe: the continuous process owns it,
+        # and a daily probe from every cron tick would itself be mail volume.
+        if not RUN_ONCE and not await engine.resend_health_check():
             print("[HEALTHCHECK] HOLD: engine will not mail any lead. Exiting.")
             return
         await engine.run_loop()

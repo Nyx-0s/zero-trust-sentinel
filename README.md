@@ -187,40 +187,45 @@ any Docker host (see Step 2 and Step 4).
 
 ---
 
-## Card-Free Distributed Deployment (Replit + Neon + laptop Hunter)
+## Card-Free Distributed Deployment (Vercel Body + Neon + GitHub Actions loops)
 
 No credit card, no Docker: three cheap/free pieces that each do one job.
 
 | Component | Where it runs | Command |
 |---|---|---|
-| `api.py` + cockpit (16 endpoints, Digital Twin) | Replit free tier | `uvicorn api:app --host 0.0.0.0 --port 8080` (see [.replit](.replit)) |
-| `outbound_engine.py` (the Voice) | Replit, Shell tab | `python outbound_engine.py` |
-| `hunter.py` (the Brain - Groq-powered prospecting) | Your laptop | `python hunter.py --api https://YOUR-REPL --limit 10` |
-| Postgres | Neon free tier | `DATABASE_URL` secret in Replit |
-| PayPal | Sandbox REST app | secrets in Replit (`PAYPAL_MODE=sandbox`) |
+| `api.py` + cockpit (16 endpoints, Digital Twin) | Vercel Hobby (Python runtime) | `vercel deploy --prod` — service `sentinel-web`, entrypoint `api:app` ([vercel.json](vercel.json)) |
+| `outbound_engine.py` (the Voice) | Inside the API process | GitHub Actions `outbound-engine` -> `POST /internal/run-batch` with `X-Cron-Token` |
+| `hunter.py` (the Brain - Groq-powered prospecting) | GitHub Actions `hunter-discovery` (6h) or your laptop | `python hunter.py --api https://YOUR-BODY --limit 10` |
+| `win_back_cron.py` (30-day lifecycle) | GitHub Actions `win-back-daily` | `python win_back_cron.py` |
+| Postgres | Neon free tier | `DATABASE_URL` env var on Vercel + repo secret |
+| PayPal | REST app | env vars on Vercel (`PAYPAL_MODE=sandbox` while testing) |
 
 **Steps:**
 
-1. Replit -> Create Repl -> Import from GitHub -> `Nyx-0s/zero-trust-sentinel`.
-   (Importing a *private* repo may require a paid Replit plan - if gated,
-   make the repo public for the import: it contains no secrets.)
-2. The `.replit` file already sets the Run command. Set the Secrets tab:
-   `GROQ_API_KEY`, `SENDGRID_API_KEY`, `FROM_EMAIL`, `DATABASE_URL` (Neon),
-   `PAYPAL_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET`,
-   `PAYPAL_PLAN_ID=P-8E455735W3884671YNLNRSVQ`, `PAYPAL_WEBHOOK_ID`,
-   `SITE_URL=https://YOUR-REPL`, `MAX_EMAILS_PER_DAY=20`.
-3. Run. The cockpit is at your Replit URL; `GET /health` must return 200.
-4. In a Shell tab: `python outbound_engine.py` (the follow-up loop).
-5. On your laptop: `python hunter.py --api https://YOUR-REPL --dry-run` to
+1. `vercel link --project <name>`, then `vercel env add <NAME> production`
+   for: `GROQ_API_KEY`, `SENDGRID_API_KEY`, `FROM_EMAIL`, `DATABASE_URL`
+   (Neon), `PAYPAL_*`, `SITE_URL=https://zero-trust-sentinel-opal.vercel.app`,
+   `MAX_EMAILS_PER_DAY`, `JITTER_MIN_SECONDS`, `JITTER_MAX_SECONDS`,
+   `CRON_SECRET`, `INLINE_SCAN=1`.
+2. `vercel deploy --prod`. The cockpit is at the production alias;
+   `GET /health` must return 200 with `"status":"healthy"`.
+3. Set the same values as GitHub Actions secrets (`gh secret set <NAME>`) —
+   the scheduled loops read `SITE_URL` and `CRON_SECRET` only.
+4. On your laptop: `python hunter.py --api https://YOUR-BODY --dry-run` to
    watch it confirm signals, then drop `--dry-run` to feed `/capture`.
+5. The Face: upload `static/` to InfinityFree `htdocs/` over FTP (creds live
+   in `.env` as `IFREE_FTP_*`). `DEFAULT_API` in `static/index.html` must
+   point at the Body.
 
-**Honest limits of the free tier:**
+**Honest limits of the free tiers:**
 
-- Replit free apps **sleep** when idle (Always On is paid). The Hunter pings
-  the API before each hunt, which wakes it; expect a ~30-60s cold start.
+- Vercel Hobby caps a request at 300s and has no always-on process:
+  `INLINE_SCAN=1` runs scans inside the request, and the worker loops that
+  `worker.sh` used to own are GitHub Actions schedules hitting the
+  token-guarded `/internal/run-batch` endpoint.
 - The Go scanner toolchain (subfinder/httpx/nuclei) is not installed on
-  Replit; the LangGraph analysis pipeline runs, but live-tool scan data comes
-  from wherever the full toolchain runs.
+  Vercel; `scanners.py` falls back to its Python probes, so live-tool scan
+  data comes from wherever the full toolchain runs (Docker/VPS).
 - `hunter.py` replaces Harvey's *job* (signal discovery -> `/capture`) with
   Groq; Harvey itself (ethanplusai/harvey) needs the Claude/Codex CLI and has
   no Groq mode.

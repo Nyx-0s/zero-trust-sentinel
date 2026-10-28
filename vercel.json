@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "sentinel-web": {
+      "root": ".",
+      "framework": "fastapi",
+      "entrypoint": "api:app",
+      "functions": {
+        "api.py": {
+          "maxDuration": 300
+        }
+      }
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": { "service": "sentinel-web" }
+    }
+  ]
+}

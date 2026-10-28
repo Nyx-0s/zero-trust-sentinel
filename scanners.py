@@ -3,6 +3,9 @@ import json
 import asyncio
 import time
 import socket
+import ssl
+import urllib.request
+from datetime import datetime, timezone
 from typing import Dict, List
 from utils import robust_json_parse, sanitize_domain, is_valid_domain, trim_scan_for_llm
 
@@ -22,30 +25,87 @@ async def run_subprocess(cmd: str, timeout: int = 120) -> str:
     except Exception as e:
         return f"ERROR: {str(e)}"
 
+async def scan_subdomains_ct(domain: str) -> List[str]:
+    """Passive fallback: certificate transparency (crt.sh) over HTTPS.
+
+    Runs when subfinder is not installed (serverless/Vercel builds ship no
+    Go binaries). CT logs are public data a browser could fetch - the same
+    safety class as subfinder's passive sources.
+    """
+    url = f"https://crt.sh/?q=%25.{domain}&output=json"
+
+    def _fetch() -> List[str]:
+        req = urllib.request.Request(url, headers={"User-Agent": "Zero-Trust-Sentinel/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            rows = json.loads(resp.read().decode("utf-8", "replace"))
+        names = set()
+        for row in rows:
+            for name in str(row.get("name_value", "")).splitlines():
+                name = name.strip().lower().lstrip("*.")
+                if name.endswith(domain) and is_valid_domain(name):
+                    names.add(name)
+        return sorted(names)
+
+    try:
+        names = await asyncio.get_running_loop().run_in_executor(None, _fetch)
+        print(f"[SCOUT] CT fallback found {len(names)} name(s) for {domain}")
+        return names
+    except Exception as e:
+        print(f"[SCOUT] CT fallback failed: {e}")
+        return []
+
+
 async def scan_subdomains(domain: str) -> List[str]:
-    """Agent 1a: Subdomain Enumeration."""
+    """Agent 1a: Subdomain Enumeration (subfinder, CT fallback when absent)."""
     domain = sanitize_domain(domain)
     print(f"[SCOUT] Enumerating subdomains for {domain}...")
     cmd = f"subfinder -d {domain} -silent -all"
     output = await run_subprocess(cmd)
-    if output.startswith("ERROR"):
-        return []
-    subdomains = [line.strip() for line in output.splitlines() if line.strip()]
+    subdomains = [] if output.startswith("ERROR") else [
+        line.strip() for line in output.splitlines() if line.strip()
+    ]
+    if not subdomains:
+        # Tool missing (exit 127 -> "ERROR") or genuinely zero results:
+        # CT logs still give an honest, passive enumeration.
+        subdomains = await scan_subdomains_ct(domain)
     return subdomains
 
+def _plain_probe(host: str) -> Dict:
+    """One browser-like GET (no auth, no wordlists) - the httpx fallback."""
+    import re as _re
+    result = {"url": f"https://{host}", "status_code": None, "title": "", "tech": []}
+    for scheme in ("https", "http"):
+        try:
+            req = urllib.request.Request(
+                f"{scheme}://{host}/",
+                headers={"User-Agent": "Zero-Trust-Sentinel/1.0 (public-surface probe)"},
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                body = resp.read(8192).decode("utf-8", "replace")
+                result["url"] = resp.geturl() or result["url"]
+                result["status_code"] = resp.status
+            m = _re.search(r"<title[^>]*>(.*?)</title>", body, _re.I | _re.S)
+            if m:
+                result["title"] = m.group(1).strip()[:200]
+            return result
+        except Exception:
+            continue
+    return result
+
+
 async def probe_live_hosts(subdomains: List[str]) -> List[Dict]:
-    """Agent 1b: HTTP Probing."""
+    """Agent 1b: HTTP Probing (httpx, plain-GET fallback when absent)."""
     if not subdomains:
         return []
-    
+
     print(f"[SCOUT] Probing {len(subdomains)} hosts...")
     domains_file = "/tmp/domains.txt"
     with open(domains_file, 'w') as f:
         f.write("\n".join(subdomains))
-        
+
     cmd = f"httpx -l {domains_file} -json -silent"
     output = await run_subprocess(cmd)
-    
+
     live_hosts = []
     for line in output.splitlines():
         if not line:
@@ -58,10 +118,87 @@ async def probe_live_hosts(subdomains: List[str]) -> List[Dict]:
                 "title": data.get("title"),
                 "tech": data.get("tech", [])
             })
+
+    if not live_hosts and subdomains:
+        # httpx missing or silent-failed: probe a bounded number of hosts
+        # with plain GETs (sequential, one connection each - no hammering).
+        loop = asyncio.get_running_loop()
+        for host in subdomains[:25]:
+            res = await loop.run_in_executor(None, _plain_probe, host)
+            if res["status_code"]:
+                live_hosts.append(res)
+        if live_hosts:
+            print(f"[SCOUT] plain-GET fallback found {len(live_hosts)} live host(s)")
     return live_hosts
 
+async def passive_surface_checks(domain: str, live_hosts: List[Dict]) -> List[Dict]:
+    """Evidence-based, non-intrusive observations used when nuclei is absent.
+
+    These are NOT vulnerability claims: they record what an unauthenticated
+    visitor can plainly observe (missing HSTS, directory listing, server
+    version disclosure, dead security contact). Each carries its evidence
+    URL so the report and the outreach never overstate what was established.
+    """
+    findings: List[Dict] = []
+    for host in live_hosts[:5]:
+        url = host.get("url")
+        if not url:
+            continue
+
+        def _head(u=url):
+            req = urllib.request.Request(u, headers={"User-Agent": "Zero-Trust-Sentinel/1.0"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                return resp.headers, resp.read(4096).decode("utf-8", "replace")
+
+        try:
+            headers, body = await asyncio.get_running_loop().run_in_executor(None, _head)
+        except Exception:
+            continue
+
+        if str(headers.get("Strict-Transport-Security", "")).strip() == "" and u_ssl_is_https(url):
+            findings.append({
+                "template_id": "passive-missing-hsts",
+                "name": "HSTS header not served",
+                "severity": "medium",
+                "url": url,
+                "matched_at": url,
+                "description": "The HTTPS response carries no Strict-Transport-Security header, "
+                               "so a first request can be downgraded on hostile networks.",
+                "confidence": "high",
+                "evidence": "response header observation (no header present)",
+            })
+        if "<title>Index of /" in body or "Directory listing for" in body:
+            findings.append({
+                "template_id": "passive-dir-listing",
+                "name": "Directory listing enabled",
+                "severity": "medium",
+                "url": url,
+                "matched_at": url,
+                "description": "The web root lists its files publicly, exposing implementation detail.",
+                "confidence": "high",
+                "evidence": "public directory index rendered at the URL",
+            })
+        server = str(headers.get("Server", ""))
+        if server and any(ch.isdigit() for ch in server):
+            findings.append({
+                "template_id": "passive-server-version-disclosure",
+                "name": f"Server version disclosed: {server}",
+                "severity": "low",
+                "url": url,
+                "matched_at": url,
+                "description": "The Server header advertises a software version to unauthenticated visitors.",
+                "confidence": "high",
+                "evidence": f"Server: {server}",
+            })
+    return findings
+
+
+def u_ssl_is_https(url: str) -> bool:
+    return url.lower().startswith("https://")
+
+
 async def scan_vulnerabilities(live_hosts: List[Dict]) -> List[Dict]:
-    """Agent 1c: Nuclei Vulnerability Scanning."""
+    """Agent 1c: Nuclei Vulnerability Scanning (passive fallback when absent)."""
     if not live_hosts:
         return []
         
@@ -72,8 +209,11 @@ async def scan_vulnerabilities(live_hosts: List[Dict]) -> List[Dict]:
         
     cmd = f"nuclei -l {urls_file} -severity critical,high -json -silent"
     output = await run_subprocess(cmd, timeout=300)
-    
+
     vulns = []
+    tool_missing = False
+    if output.startswith("ERROR"):
+        tool_missing = True
     for line in output.splitlines():
         if not line:
             continue
@@ -87,24 +227,68 @@ async def scan_vulnerabilities(live_hosts: List[Dict]) -> List[Dict]:
                 "matched_at": data.get("matched-at"),
                 "description": data.get("info", {}).get("description")
             })
+
+    if tool_missing:
+        domain = (live_hosts[0].get("url") or "").split("://", 1)[-1].split("/", 1)[0]
+        vulns = await passive_surface_checks(domain, live_hosts)
+        print(f"[SCOUT] nuclei unavailable - {len(vulns)} passive observation(s) recorded")
     return vulns
 
 async def check_tls(domain: str) -> Dict:
-    """Agent 1d: TLS Configuration Check."""
+    """Agent 1d: TLS Configuration Check (stdlib ssl fallback when absent)."""
     domain = sanitize_domain(domain)
     print(f"[SCOUT] Checking TLS for {domain}...")
     # testssl.sh is slow, run with a tighter timeout
     cmd = f"testssl.sh --json-file - {domain}"
     output = await run_subprocess(cmd, timeout=180)
-    
+
     data = robust_json_parse(output)
-    if isinstance(data, dict):
+    if isinstance(data, dict) and data:
         return {
             "protocols": data.get("protocols", []),
             "certificates": data.get("certificates", []),
             "scores": data.get("scores", [])
         }
-    return {"error": "TLS parse failed"}
+    return await check_tls_stdlib(domain)
+
+
+async def check_tls_stdlib(domain: str) -> Dict:
+    """Handshake the real server with Python's ssl and report what is seen.
+
+    Public information only: protocol versions accepted, certificate subject,
+    issuer and expiry - exactly what any browser's lock icon shows.
+    """
+    def _probe() -> Dict:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((domain, 443), timeout=12) as sock:
+            with ctx.wrap_socket(sock, server_hostname=domain) as tls:
+                cert = tls.getpeercert() or {}
+                not_after = cert.get("notAfter")
+                days_left = None
+                if not_after:
+                    exp = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                    days_left = (exp.replace(tzinfo=timezone.utc) -
+                                 datetime.now(timezone.utc)).days
+                return {
+                    "protocols": [f"TLSv{tls.version().split('TLSv')[-1]}"],
+                    "cipher": tls.cipher()[0] if tls.cipher() else None,
+                    "certificates": [{
+                        "subject": dict(x for x in cert.get("subject", ())[0]) if cert.get("subject") else {},
+                        "issuer": dict(x for x in cert.get("issuer", ())[0]) if cert.get("issuer") else {},
+                        "not_after": not_after,
+                        "days_remaining": days_left,
+                        "san": [v for _, v in cert.get("subjectAltName", ())],
+                    }],
+                    "scores": [],
+                    "source": "stdlib-ssl",
+                }
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(None, _probe)
+        print(f"[SCOUT] TLS (stdlib): {result['protocols']} "
+              f"cert expires in {result['certificates'][0]['days_remaining']}d")
+        return result
+    except Exception as e:
+        return {"error": f"TLS probe failed: {e}"}
 
 async def run_full_scan(domain: str) -> Dict:
     """

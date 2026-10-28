@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operations | Zero-Trust Sentinel</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/site.css">
+</head>
+<body>
+
+<header class="site-header">
+    <div class="container header-inner">
+        <a class="wordmark" href="index.html">ZERO-TRUST <span class="mark">SENTINEL</span></a>
+        <button class="nav-toggle" aria-expanded="false" aria-controls="site-nav">Menu</button>
+        <nav class="nav" id="site-nav">
+            <a href="index.html">Home</a>
+            <a href="platform/index.html">Platform</a>
+            <a href="pricing.html">Pricing</a>
+            <a href="about.html">Company</a>
+            <a class="btn btn-primary header-cta" href="index.html#scan-section">Get Your Risk Score</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+<section class="hero">
+    <div class="container prose">
+        <span class="eyebrow">Internal</span>
+        <h1>Operations</h1>
+        <p class="lead">Every number on this page is aggregated from the live database when you load it. Nothing here is cached, stored, or estimated. Counts only &mdash; no addresses, no report contents.</p>
+        <p id="ops-error" class="small" style="color:#c0392b;display:none;"></p>
+        <p id="ops-updated" class="small muted"></p>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">Pipeline</span><h2>Leads</h2></div>
+        <div class="grid grid-3">
+            <div class="card"><h3 id="m-leads-total">--</h3><p class="small muted">Total leads captured</p></div>
+            <div class="card"><h3 id="m-leads-qualified">--</h3><p class="small muted">Qualified (2+ confirmed signals)</p></div>
+            <div class="card"><h3 id="m-leads-scanned">--</h3><p class="small muted">Scans completed / hot</p></div>
+            <div class="card"><h3 id="m-leads-progress">--</h3><p class="small muted">Scans pending or running</p></div>
+            <div class="card"><h3 id="m-reports">--</h3><p class="small muted">Reports generated</p></div>
+            <div class="card"><h3 id="m-customers">--</h3><p class="small muted">Active subscriptions</p></div>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">Outreach</span><h2>Email</h2></div>
+        <div class="grid grid-3">
+            <div class="card"><h3 id="m-emails-sent">--</h3><p class="small muted">Messages accepted by provider (all stages)</p></div>
+            <div class="card"><h3 id="m-suppressed">--</h3><p class="small muted">Suppressed addresses</p></div>
+            <div class="card"><h3 id="m-sender">--</h3><p class="small muted">Active sender</p></div>
+        </div>
+        <div class="card" style="margin-top:1rem;">
+            <h3>Stage detail</h3>
+            <div id="m-stages" class="small muted">Loading&hellip;</div>
+        </div>
+        <div class="card" style="margin-top:1rem;">
+            <h3>Suppression reasons</h3>
+            <div id="m-suppression" class="small muted">Loading&hellip;</div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-head"><span class="eyebrow">System</span><h2>Health</h2></div>
+        <div class="grid grid-3">
+            <div class="card"><h3 id="m-llm">--</h3><p class="small muted">LLM analysis configured</p></div>
+            <div class="card"><h3 id="m-inline">--</h3><p class="small muted">Scan mode</p></div>
+            <div class="card"><h3 id="m-failed">--</h3><p class="small muted">Failed jobs / failed scans</p></div>
+        </div>
+        <div class="card" style="margin-top:1rem;">
+            <h3>Active holds</h3>
+            <div id="m-holds" class="small muted">Loading&hellip;</div>
+        </div>
+        <div class="card" style="margin-top:1rem;">
+            <h3>Not tracked yet</h3>
+            <div id="m-untracked" class="small muted">Loading&hellip;</div>
+        </div>
+    </div>
+</section>
+</main>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-bottom">
+            <span>&copy; <span data-year>2026</span> Zero-Trust Sentinel. All rights reserved.</span>
+            <span>External exposure, measured honestly.</span>
+        </div>
+    </div>
+</footer>
+
+<script src="assets/js/site.js"></script>
+<script>
+    // Same API resolution as index.html: served by the Body it is same-origin;
+    // served from the Face (static InfinityFree) every call targets the Body.
+    const FACE_HOSTS = ['zerodaysentinel.xo.je', 'www.zerodaysentinel.xo.je'];
+    const DEFAULT_API = 'https://zero-trust-sentinel-opal.vercel.app';
+    const API_BASE = new URLSearchParams(window.location.search).get('api')
+        || (FACE_HOSTS.includes(window.location.hostname) ? DEFAULT_API
+            : window.location.origin);
+
+    function setText(id, v) { document.getElementById(id).innerText = v; }
+    function listItems(items) {
+        if (!items || !items.length) return 'None';
+        return items.map(function (i) { return '<div>' + i + '</div>'; }).join('');
+    }
+
+    fetch(API_BASE + '/api/ops/summary')
+        .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function (d) {
+            setText('m-leads-total', d.leads.total);
+            setText('m-leads-qualified', d.leads.qualified);
+            setText('m-leads-scanned', d.leads.scanned);
+            setText('m-leads-progress', d.leads.in_progress);
+            setText('m-reports', d.reports);
+            setText('m-customers', d.customers);
+            setText('m-emails-sent', d.emails_accepted);
+            setText('m-suppressed', d.leads.suppressed);
+            setText('m-sender', d.health.email_sender || 'none configured (HOLD)');
+            setText('m-llm', d.health.llm_configured ? 'Yes' : 'No');
+            setText('m-inline', d.health.inline_scan ? 'inline (serverless)' : 'background worker');
+            setText('m-failed', d.failed_jobs + ' / ' + d.failed_scans);
+
+            var stages = Object.keys(d.stages || {});
+            document.getElementById('m-stages').innerHTML = stages.length
+                ? stages.map(function (s) {
+                    return '<div><strong>' + s + '</strong>: ' + d.stages[s].sends
+                        + ' sends, ' + d.stages[s].leads + ' leads</div>';
+                }).join('')
+                : 'No sends yet';
+            var reasons = Object.keys(d.suppression || {});
+            document.getElementById('m-suppression').innerHTML = reasons.length
+                ? reasons.map(function (r) {
+                    return '<div><strong>' + r + '</strong>: ' + d.suppression[r] + '</div>';
+                }).join('')
+                : 'No suppressions';
+            document.getElementById('m-holds').innerHTML = listItems(d.health.holds);
+            document.getElementById('m-untracked').innerHTML = listItems(d.not_tracked);
+            setText('ops-updated', 'Loaded ' + new Date().toLocaleString()
+                + ' &mdash; last pipeline activity: '
+                + (d.leads.last_activity ? new Date(d.leads.last_activity).toLocaleString() : 'never'));
+        })
+        .catch(function (e) {
+            var err = document.getElementById('ops-error');
+            err.style.display = 'block';
+            err.innerText = 'Could not load metrics from ' + API_BASE + ': ' + e.message;
+        });
+</script>
+</body>
+</html>
