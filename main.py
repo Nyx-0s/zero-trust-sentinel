@@ -27,6 +27,41 @@ llm = ChatOpenAI(
     api_key=GROQ_KEY or "gsk-not-configured"
 )
 
+# Groq meters 200,000 tokens/day PER MODEL. When the primary model reaches
+# its cap, every scan 429s with "Used 200000" while the same API key still
+# has a full budget on a sibling model - so a rate-limited call switches to
+# the alternate instead of dying and holding up a lead's report.
+GROQ_MODEL_PRIMARY = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_MODEL_FALLBACK = os.getenv("GROQ_MODEL_FALLBACK", "openai/gpt-oss-20b")
+_current_model = GROQ_MODEL_PRIMARY
+
+
+def switch_model() -> Optional[str]:
+    """Point the shared client at the other model in the pair.
+
+    Idempotent: with a single model configured (or after the pair has
+    flipped) this returns None and the caller simply keeps retrying.
+    """
+    global _current_model
+    other = (GROQ_MODEL_FALLBACK if _current_model != GROQ_MODEL_FALLBACK
+             else GROQ_MODEL_PRIMARY)
+    if not other or other == _current_model:
+        return None
+    _current_model = other
+    # langchain-openai stores the id in `model_name` (aliased to `model` on
+    # the wire); older/newer releases spell it differently, so try both.
+    for attr in ("model_name", "model"):
+        try:
+            setattr(llm, attr, other)
+            break
+        except Exception:
+            continue
+    else:
+        print(f"[LLM] model switch failed; staying on {_current_model}")
+        return None
+    print(f"[LLM] rate-limited on the previous model - now using {other}")
+    return other
+
 # --- Rate limiting ----------------------------------------------------------
 # Groq's free tier meters 8,000 TPM / 200,000 TPD. A burst of concurrent
 # scans trips HTTP 429 ("Rate limit reached ... Please try again in 24.615s")
@@ -41,6 +76,10 @@ GROQ_TPM_LIMIT = int(os.getenv("GROQ_TPM_LIMIT", "7500"))   # 0 disables
 # would throttle nothing. settle() refunds the difference against the usage
 # the response actually reports, so the bucket tracks reality over time.
 GROQ_CALL_TOKENS = int(os.getenv("GROQ_CALL_TOKEN_ESTIMATE", "1500"))
+# Extra tokens held per call for the model's hidden reasoning, on top of the
+# prompt size. Observed 429s came from completions far larger than the flat
+# hold, so every call now reserves this much before it starts.
+GROQ_COMPLETION_ALLOWANCE = int(os.getenv("GROQ_COMPLETION_ALLOWANCE", "3000"))
 
 
 class GroqRateLimiter:
@@ -64,29 +103,64 @@ class GroqRateLimiter:
         self.last_refill = now
 
     async def acquire(self, token_cost: Optional[float] = None) -> float:
-        """Hold token budget before an LLM call; wait out an empty minute."""
+        """Hold token budget before an LLM call; wait out an empty minute.
+
+        The wait happens OUTSIDE the lock: a refund landing during someone
+        else's sleep has to be able to shorten that sleep, otherwise a
+        finished call's tokens are invisible until the sleeper wakes.
+        """
         if self.max_tokens <= 0:
             return 0.0  # throttling disabled (tests, or a paid tier)
         cost = float(self.call_cost if token_cost is None else token_cost)
-        async with self.lock:
-            self._refill()
-            if self.tokens < cost:
-                await asyncio.sleep((cost - self.tokens) / (self.max_tokens / 60.0))
+        while True:
+            async with self.lock:
                 self._refill()
-            self.tokens -= cost
-        return cost
+                if self.tokens >= cost:
+                    self.tokens -= cost
+                    return cost
+                missing = cost - self.tokens
+                # (tokens/minute) -> tokens/second
+                wait = missing / (self.max_tokens / 60.0)
+            await asyncio.sleep(min(max(wait, 0.05), 5.0))
+
+    def estimate_call(self, messages: Any) -> float:
+        """Tokens to hold for one agent call: prompt + a reasoning allowance.
+
+        gpt-oss models think out loud, so the completion routinely outweighs
+        the prompt and holding a flat 1,500 lets several agents start at once,
+        spend 4k each and trip Groq's 8,000 TPM - which is exactly how three
+        concurrent scans 429'd. Estimating from the real messages keeps the
+        bucket honest before the call instead of only after it.
+        """
+        try:
+            chars = sum(len(str(getattr(m, "content", "") or "")) for m in messages)
+        except Exception:
+            chars = 0
+        prompt_tokens = max(1, chars // 4)
+        return float(min(prompt_tokens + GROQ_COMPLETION_ALLOWANCE, self.max_tokens))
 
     async def settle(self, hold: float, response: Any) -> None:
-        """Refund the part of the hold the call did not actually spend."""
+        """Reconcile the hold against what the call actually cost.
+
+        Under-spend is refunded; over-spend (the common case with reasoning
+        models) is debited, otherwise the bucket believes it has budget that
+        Groq has already counted - and the next burst gets a 429.
+        """
         if hold <= 0:
             return
         usage = getattr(response, "usage_metadata", None)
         actual = usage.get("total_tokens") if isinstance(usage, dict) else None
-        if not isinstance(actual, (int, float)) or actual >= hold:
+        if not isinstance(actual, (int, float)):
+            return
+        delta = float(actual) - float(hold)
+        if delta == 0:
             return
         async with self.lock:
             self._refill()
-            self.tokens = min(self.max_tokens, self.tokens + (hold - actual))
+            if delta > 0:
+                self.tokens = max(0.0, self.tokens - delta)
+            else:
+                self.tokens = min(self.max_tokens, self.tokens - delta)
 
 
 groq_limiter = GroqRateLimiter()
@@ -197,7 +271,7 @@ async def analyst(state: ScanState) -> Dict:
         feedback_context=feedback_context,
         signals_context=signals_context,
     )
-    hold = await groq_limiter.acquire()
+    hold = await groq_limiter.acquire(groq_limiter.estimate_call(messages))
     response = await llm.ainvoke(messages)
     await groq_limiter.settle(hold, response)
     
@@ -240,7 +314,7 @@ async def fixer(state: ScanState) -> Dict:
     """)
     
     messages = prompt.format(domain=domain, risks=json.dumps(risks))
-    hold = await groq_limiter.acquire()
+    hold = await groq_limiter.acquire(groq_limiter.estimate_call(messages))
     response = await llm.ainvoke(messages)
     await groq_limiter.settle(hold, response)
     
@@ -288,7 +362,7 @@ async def editor(state: ScanState) -> Dict:
     messages = prompt.format(
         domain=domain, score=score, risks=json.dumps(risks), signals_context=signals_context,
     )
-    hold = await groq_limiter.acquire()
+    hold = await groq_limiter.acquire(groq_limiter.estimate_call(messages))
     response = await llm.ainvoke(messages)
     await groq_limiter.settle(hold, response)
     
@@ -331,7 +405,7 @@ async def critic(state: ScanState) -> Dict:
         risks=json.dumps(risks),
         fixes=json.dumps(fixes)
     )
-    hold = await groq_limiter.acquire()
+    hold = await groq_limiter.acquire(groq_limiter.estimate_call(messages))
     response = await llm.ainvoke(messages)
     await groq_limiter.settle(hold, response)
     
@@ -376,7 +450,7 @@ app = workflow.compile()
 
 # --- Execution Function ---
 async def run_scan(domain: str, client_id: str = None, signals: List[str] = None,
-                   max_retries: int = 3) -> Dict:
+                   max_retries: int = 5) -> Dict:
     """Entry point for the scanning process.
 
     signals: optional discovery signals (e.g. ["exposed_api"]) that the Analyst
@@ -400,6 +474,12 @@ async def run_scan(domain: str, client_id: str = None, signals: List[str] = None
     # per minute and per day, so the scans that lose a burst's race get a 429
     # while their siblings succeed. Anything else still raises immediately.
     final_state: Optional[Dict] = None
+    # One invocation has a platform deadline (Vercel: 300s) and the recovery
+    # sweep re-queues anything that yields, so waiting indefinitely here only
+    # turns a rate-limited lead into a timed-out one. Cap the total wait and
+    # fail fast; the next tick retries with a fresher budget.
+    total_wait = 0.0
+    max_total_wait = float(os.getenv("RATE_LIMIT_MAX_WAIT", "75"))
     for attempt in range(1, max_retries + 1):
         try:
             final_state = await app.ainvoke(initial_state)
@@ -407,9 +487,18 @@ async def run_scan(domain: str, client_id: str = None, signals: List[str] = None
         except Exception as e:
             if attempt >= max_retries or not _is_rate_limit_error(e):
                 raise
+            # A per-day cap does not lift in the retry window; the sibling
+            # model's budget is still full, so move the scan there first.
+            switched = switch_model()
             delay = _rate_limit_delay(e, attempt)
+            if total_wait + delay > max_total_wait:
+                raise RuntimeError(
+                    f"Groq still rate-limited after {total_wait:.0f}s of waiting "
+                    f"for {domain} - yielding to the recovery sweep") from e
+            total_wait += delay
             print(f"[RATE LIMIT] Groq 429 for {domain}; "
-                  f"retry {attempt}/{max_retries - 1} in {delay:.1f}s")
+                  f"retry {attempt}/{max_retries - 1} in {delay:.1f}s"
+                  + (f" (model -> {switched})" if switched else ""))
             await asyncio.sleep(delay)
     if final_state is None:
         raise RuntimeError(f"run_scan produced no result for {domain}")

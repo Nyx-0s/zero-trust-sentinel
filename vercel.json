@@ -12,10 +12,22 @@
       }
     }
   },
+  "crons": [
+    {
+      "path": "/internal/discover?limit=3",
+      "schedule": "43 5 * * *"
+    },
+    {
+      "path": "/internal/run-batch",
+      "schedule": "17 6 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": { "service": "sentinel-web" }
+      "destination": {
+        "service": "sentinel-web"
+      }
     }
   ]
 }

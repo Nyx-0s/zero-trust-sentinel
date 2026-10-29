@@ -56,6 +56,7 @@ from db import (
     is_domain_scanning,
     create_lead_task,
     get_lead_task,
+    get_recent_lead_task,
     mark_lead_hot,
     get_hot_leads,
     mark_lead_emailed,
@@ -190,6 +191,10 @@ class LeadCapture(BaseModel):
     signals: List[str] = []  # Harvey discovery signals (exposed_api, staging_exposed, ...)
     harvey_ref: str = ""     # Harvey discovery reference (ties replies to the finding)
     evidence: Dict[str, Any] = {}  # hunter proof: which URL showed what
+    # Discovery running inside a short-lived cron must not hold the request
+    # open for a full analysis: defer=True records the lead and lets the
+    # recovery sweep (or the next /task poll) run the scan.
+    defer: bool = False
 
 
 def _coerce_client_id(raw: Any) -> Optional[int]:
@@ -316,6 +321,22 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
     if await is_suppressed(lead.email):
         return {"status": "suppressed", "message": "You are already on our suppression list."}
 
+    # 1b. Idempotent ingest: discovery re-hits the same target list every few
+    #     hours and the scan button gets double-clicked. A second task for a
+    #     domain we already scanned inside this window would spend the Groq
+    #     daily budget to produce a report we already have, so hand back the
+    #     live task instead. Failed attempts are never reused - that is how a
+    #     retry still gets a fresh scan.
+    fresh = await get_recent_lead_task(
+        domain, int(os.getenv("LEAD_FRESH_SECONDS", "21600")))
+    if fresh:
+        existing_client = await get_client_by_domain(domain)
+        print(f"[CAPTURE] {domain} already has task {fresh['id']} "
+              f"({fresh['status']}) - reusing it")
+        return {"status": "started", "scan_id": fresh["id"],
+                "client_id": (existing_client or {}).get("id"),
+                "referral_applied": False, "duplicate": True}
+
     # 2. Check for a matching referral for this domain
     referral = await get_referral_by_domain(domain) if ref else None
 
@@ -330,7 +351,13 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
         client_db_id = await create_client(domain, email=lead.email, name=lead.name)
 
     # 3b. Create a task in DB
-    task_id = await create_lead_task(domain, lead.email, lead.name)
+    # A capture without an address (a button click on the Face, or a discovery
+    # re-scan) inherits the contact we already hold for this domain: dropping
+    # it would leave a finished report nobody can send, even though outreach
+    # already has a published, role-based route for that same company.
+    task_email = ((lead.email or "").strip()
+                  or ((client or {}).get("email") or "").strip())
+    task_id = await create_lead_task(domain, task_email, lead.name)
 
     # 3b. Persist Harvey discovery signals so the Analyst/Editor prioritize them
     if lead.signals or lead.harvey_ref or lead.evidence:
@@ -346,8 +373,13 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
     # 5. Trigger background scan (signals flow into the LangGraph swarm).
     #    Inline when INLINE_SCAN=1: the POST only returns once the report
     #    exists, so the Face's first poll already sees a terminal state.
-    await _await_or_spawn(process_lead_scan(task_id, domain, lead.email, lead.name,
-                                            signals=lead.signals))
+    #    `defer` is the cron path: discovery runs inside a bounded function,
+    #    so it records the lead and the recovery sweep claims the scan.
+    if lead.defer:
+        print(f"[CAPTURE] {domain} deferred - scan left for the recovery sweep")
+    else:
+        await _await_or_spawn(process_lead_scan(task_id, domain, lead.email, lead.name,
+                                                signals=lead.signals))
 
     return {"status": "started", "scan_id": task_id, "client_id": client_db_id,
             "referral_applied": bool(referral)}
@@ -1739,29 +1771,79 @@ async def unsubscribe(lead: int, token: str) -> Any:
     return {"status": "unsubscribed", "lead": lead}
 
 
-@app.post("/internal/run-batch")
-async def internal_run_batch(x_cron_token: str = Header(default="")) -> Any:
-    """Drive the outbound engine when there is no long-lived worker process.
+def _cron_authorized(x_cron_token: str, authorization: str) -> bool:
+    """Two call shapes, one secret.
 
-    Called by the external cron (GitHub Actions) with X-Cron-Token. One
-    bounded batch per call: sends whatever is due under the daily cap, then
-    reclaims stranded scans. Idle jitter is compressed because the HTTP
-    caller has a deadline; pacing across the day comes from the cron
-    schedule and the per-stage day gates in the engine.
+    GitHub Actions POSTs X-Cron-Token; Vercel Cron cannot set a custom header
+    but automatically sends `Authorization: Bearer ${CRON_SECRET}` whenever
+    that environment variable exists. No secret configured = endpoint off.
     """
     import hmac as _hmac
-    if not CRON_SECRET or not _hmac.compare_digest(CRON_SECRET, x_cron_token):
+    if not CRON_SECRET:
+        return False
+    token = (x_cron_token or "").strip()
+    if not token and (authorization or "").lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    return bool(token) and _hmac.compare_digest(CRON_SECRET, token)
+
+
+@app.post("/internal/run-batch")
+async def internal_run_batch(x_cron_token: str = Header(default=""),
+                             authorization: str = Header(default="")) -> Any:
+    """Drive the outbound engine when there is no long-lived worker process.
+
+    Called by the external cron (GitHub Actions or Vercel Cron). One bounded
+    batch per call: sends whatever is due under the daily cap, then reclaims
+    stranded scans. Idle jitter is compressed because the HTTP caller has a
+    deadline; pacing across the day comes from the cron schedule and the
+    per-stage day gates in the engine.
+    """
+    if not _cron_authorized(x_cron_token, authorization):
         return JSONResponse(status_code=403, content={"error": "forbidden"})
     from outbound_engine import OutboundEngine
     engine = OutboundEngine()
     engine.jitter_min = int(os.getenv("BATCH_JITTER_MIN", "3"))
     engine.jitter_max = int(os.getenv("BATCH_JITTER_MAX", "8"))
     sent = await engine.process_batch()
-    resumed = await recover_stale_lead_scans()
+    # A serverless invocation has a hard deadline and the scans are awaited
+    # one after another, so reclaim a single stranded analysis per tick: two
+    # sequential scans reliably outlived the limit and aborted the whole
+    # batch (the sends above would still commit, but the tick would report a
+    # timeout). The next hourly tick picks up the next one.
+    resumed = await recover_stale_lead_scans(
+        limit=int(os.getenv("RECOVERY_PER_TICK", "1")))
     return {"status": "ok", "sent": sent,
             "sent_today": engine.emails_sent_today,
             "resumed_scans": resumed,
             "circuit_open": engine.circuit_breaker_active}
+
+
+@app.post("/internal/discover")
+async def internal_discover(x_cron_token: str = Header(default=""),
+                            authorization: str = Header(default=""),
+                            limit: int = 3) -> Any:
+    """One discovery pass (the Brain) inside a bounded cron invocation.
+
+    hunter probes and qualifies targets, then ingests each qualified lead with
+    defer=True, so the tick returns in seconds instead of waiting for full
+    analyses: the recovery sweep (next run-batch, or any /task poll) claims
+    those scans. Probing is blocking httpx, so it runs in a worker thread and
+    leaves the event loop serving the Face.
+    """
+    if not _cron_authorized(x_cron_token, authorization):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    import hunter
+    api_base = (os.getenv("PUBLIC_API_URL") or os.getenv("SITE_URL") or "").rstrip("/")
+    if not api_base:
+        return JSONResponse(status_code=503,
+                            content={"error": "PUBLIC_API_URL/SITE_URL not set"})
+    try:
+        limit = max(1, min(int(limit), 10))
+    except (TypeError, ValueError):
+        limit = 3
+    result = await asyncio.to_thread(hunter.run_hunt, api=api_base,
+                                     limit=limit, defer=True)
+    return {"status": "ok", **result}
 
 
 @app.get("/health")

@@ -203,19 +203,45 @@ def groq_qualify(client: httpx.Client, api_key: str, industry: str,
         'Answer JSON ONLY: {"icp_fit": true|false, "reason": "one sentence"}'
     )
     try:
-        r = client.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": GROQ_MODEL, "temperature": 0,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=45,
-        )
-        r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
-        m = re.search(r"\{.*\}", content, re.DOTALL)
-        parsed = json.loads(m.group(0)) if m else {}
-        return {"icp_fit": bool(parsed.get("icp_fit")),
-                "reason": str(parsed.get("reason", ""))[:200]}
+        last_err = ""
+        model = GROQ_MODEL
+        fallback = os.getenv("GROQ_MODEL_FALLBACK", "openai/gpt-oss-20b")
+        # Groq rate-limits (429) and blips are routine while the pipeline is
+        # scanning in parallel: three short attempts before giving up, so one
+        # busy minute does not silently mislabel a good prospect as no-fit.
+        for attempt, delay in enumerate((0.0, 2.0, 6.0), start=1):
+            if delay:
+                time.sleep(delay)
+            try:
+                r = client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"model": model, "temperature": 0,
+                          "messages": [{"role": "user", "content": prompt}]},
+                    timeout=45,
+                )
+                if r.status_code in (429, 500, 502, 503, 504):
+                    last_err = f"HTTP {r.status_code}"
+                    if r.status_code == 429 and model != fallback:
+                        # Groq meters tokens PER MODEL per day: the primary's
+                        # cap is a wait, but the sibling's budget is still
+                        # full - qualification should move there at once.
+                        model = fallback
+                        last_err = "HTTP 429 - switched to fallback model"
+                    continue
+                r.raise_for_status()
+                content = r.json()["choices"][0]["message"]["content"]
+                m = re.search(r"\{.*\}", content, re.DOTALL)
+                parsed = json.loads(m.group(0)) if m else {}
+                return {"icp_fit": bool(parsed.get("icp_fit")),
+                        "reason": str(parsed.get("reason", ""))[:200]}
+            except Exception as exc:  # transport/JSON - retry then report
+                last_err = f"{type(exc).__name__}: {exc}"[:160]
+        # Not an ICP decision: the caller must be able to tell "rejected by
+        # the gate" apart from "the gate could not run" (rerun later).
+        return {"icp_fit": False,
+                "reason": f"qualification unavailable after retries ({last_err}) - "
+                          f"re-run to reconsider"}
     except Exception as exc:  # a failed LLM call must never silently submit
         return {"icp_fit": False, "reason": f"qualification failed: {type(exc).__name__}"}
 
@@ -224,12 +250,20 @@ def groq_qualify(client: httpx.Client, api_key: str, industry: str,
 
 def submit(api_base: str, domain: str, signals: List[str],
            harvey_ref: str, email: str = "",
-           evidence: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+           evidence: Optional[Dict[str, Any]] = None,
+           defer: bool = False) -> Tuple[bool, str]:
     """POST /capture with an honest contract.
 
-    Only HTTP 200 *with* a scan_id is an ingest. A 3xx (Replit's 307 shield),
-    a 5xx (API down) or a transport error all mean the lead is NOT in the
-    Autopilot - they are reported as failures, never as submissions.
+    Only HTTP 200 *with* a scan_id is an ingest. A 3xx, a 5xx or a transport
+    error all mean the lead is NOT confirmed in the Autopilot - they are
+    reported as failures, never as submissions. A read timeout after the
+    300s window is called out separately: on INLINE_SCAN the Body keeps
+    scanning after the client gives up, so the lead usually lands anyway and
+    the recovery sweep owns it from there.
+
+    defer=True is the cron path: the Body records the lead and returns at
+    once, leaving the analysis to the recovery sweep, so a bounded serverless
+    tick can ingest several leads without holding one HTTP call open.
     Returns (ok, detail).
     """
     url = f"{api_base.rstrip('/')}/capture"
@@ -239,14 +273,23 @@ def submit(api_base: str, domain: str, signals: List[str],
     }
     if evidence:
         payload["evidence"] = evidence
+    if defer:
+        payload["defer"] = True
     try:
         r = httpx.post(
             url,
             json=payload,
             # Inline scans run inside this call (Vercel has no detached
             # tasks): recon + LLM analysis can take a couple of minutes.
-            timeout=300,
+            # A deferred capture answers immediately, so it need not wait.
+            timeout=30 if defer else 300,
         )
+    except httpx.ReadTimeout:
+        # INLINE_SCAN keeps working after the client gives up: the lead is
+        # almost always in the DB already, still scanning.
+        return False, ("capture read-timed out at 300s while the Body was "
+                       "still scanning - the lead usually lands anyway "
+                       "(recovery sweep owns it from here)")
     except httpx.HTTPError as exc:
         return False, f"API unreachable or shielded: {type(exc).__name__}: {exc}"
 
@@ -268,26 +311,26 @@ def submit(api_base: str, domain: str, signals: List[str],
                   f"scan_id={body.get('scan_id')}")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Groq-powered prospecting loop")
-    ap.add_argument("--api", default=os.getenv("HUNTER_API_URL", API_URL),
-                    help="Sentinel API base URL (default: %(default)s)")
-    ap.add_argument("--csv", default="marketing/seed_leads.csv")
-    ap.add_argument("--limit", type=int, default=10, help="max targets to hunt")
-    ap.add_argument("--dry-run", action="store_true", help="probe + qualify, submit nothing")
-    ap.add_argument("--min-signals", type=int, default=2)
-    args = ap.parse_args()
+def run_hunt(api: str, csv_path: str = "marketing/seed_leads.csv",
+             limit: int = 10, dry_run: bool = False, min_signals: int = 2,
+             defer: bool = False) -> Dict[str, Any]:
+    """One discovery pass: probe -> qualify -> ingest. Returns its counts.
 
+    Shared by the CLI (main) and by the Body's /internal/discover cron tick,
+    which needs the same loop as a callable instead of a subprocess.
+    """
     load_dotenv()
     groq_key = os.getenv("GROQ_API_KEY", "")
     if not groq_key:
         print("ERR: GROQ_API_KEY not set (env or .env)")
-        return 1
+        return {"targets": 0, "qualified": 0, "submitted": 0, "failed": 0,
+                "error": "GROQ_API_KEY not set"}
 
-    with open(args.csv, newline="") as fh:
-        targets = [r for r in csv.DictReader(fh) if r.get("domain")][: args.limit]
-    print(f"Hunting {len(targets)} targets from {args.csv} against {args.api}"
-          + (" (DRY RUN)" if args.dry_run else ""))
+    with open(csv_path, newline="") as fh:
+        targets = [r for r in csv.DictReader(fh) if r.get("domain")][:limit]
+    print(f"Hunting {len(targets)} targets from {csv_path} against {api}"
+          + (" (DRY RUN)" if dry_run else "")
+          + (" (deferred scans)" if defer else ""))
 
     submitted = qualified = failed = 0
     ref_seq = 0
@@ -299,7 +342,7 @@ def main() -> int:
 
             # The gate: >=2 signals, and custom_domain alone never counts.
             real = [s for s in signals if s != "custom_domain"]
-            if len(real) < args.min_signals - (1 if "custom_domain" in signals else 0):
+            if len(real) < min_signals - (1 if "custom_domain" in signals else 0):
                 print(f"  {domain:<16} watch-list  signals={signals or 'none'}")
                 time.sleep(1.5)
                 continue
@@ -322,13 +365,14 @@ def main() -> int:
             print(f"  {domain:<16} QUALIFIED   signals={signals} proof={proof}")
             print(f"      contact: {contact or '(none published - scan only, never mailed)'}"
                   + (f" via {contact_source}" if contact_source else ""))
-            if args.dry_run:
-                print(f"      (dry run) would POST {args.api}/capture "
+            if dry_run:
+                print(f"      (dry run) would POST {api}/capture "
                       f"domain={domain} signals={signals} ref={harvey_ref}")
             else:
                 try:
-                    ok, detail = submit(args.api, domain, signals, harvey_ref,
-                                        email=contact, evidence=evidence)
+                    ok, detail = submit(api, domain, signals, harvey_ref,
+                                        email=contact, evidence=evidence,
+                                        defer=defer)
                 except Exception as exc:  # a submit must never crash the hunt
                     ok, detail = (False,
                                   f"API unreachable or shielded: "
@@ -344,7 +388,31 @@ def main() -> int:
 
     print(f"\nDone: {qualified} qualified, {submitted} ingested"
           + (f", {failed} FAILED" if failed else "")
-          + (" (dry run - nothing submitted)" if args.dry_run else ""))
+          + (" (dry run - nothing submitted)" if dry_run else ""))
+    return {"targets": len(targets), "qualified": qualified,
+            "submitted": submitted, "failed": failed}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Groq-powered prospecting loop")
+    ap.add_argument("--api", default=os.getenv("HUNTER_API_URL", API_URL),
+                    help="Sentinel API base URL (default: %(default)s)")
+    ap.add_argument("--csv", default="marketing/seed_leads.csv")
+    ap.add_argument("--limit", type=int, default=10, help="max targets to hunt")
+    ap.add_argument("--dry-run", action="store_true", help="probe + qualify, submit nothing")
+    ap.add_argument("--min-signals", type=int, default=2)
+    ap.add_argument("--defer", action="store_true",
+                    help="ingest leads without running their analysis inline "
+                         "(the cron path: the recovery sweep claims the scans)")
+    args = ap.parse_args()
+
+    result = run_hunt(api=args.api, csv_path=args.csv, limit=args.limit,
+                      dry_run=args.dry_run, min_signals=args.min_signals,
+                      defer=args.defer)
+    if result.get("error"):
+        return 1
+    if not args.dry_run and result.get("failed"):
+        return 1
     return 0
 
 

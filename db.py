@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import asyncpg
@@ -370,6 +371,39 @@ async def get_lead_task(task_id: int) -> Optional[Dict[str, Any]]:
                     "name": row["name"], "status": row["status"],
                     "updated_at": row["updated_at"]}
         return None
+
+
+async def get_recent_lead_task(domain: str, within_seconds: int = 21600) -> Optional[Dict[str, Any]]:
+    """Newest non-failed lead task for a domain opened inside the window.
+
+    Ingest is idempotent: discovery re-runs the same target list every few
+    hours (and the scan button gets clicked twice), and a second task would
+    buy a full analysis for a report that already exists - spending the
+    Groq daily budget on a duplicate. Failed tasks are excluded so a retry
+    still opens a fresh attempt.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM lead_tasks WHERE domain = $1 "
+            "AND status IN ('pending', 'running', 'hot', 'cold', 'completed') "
+            "ORDER BY id DESC LIMIT 1",
+            domain,
+        )
+        if not row:
+            return None
+        # The age check happens in Python: SQL clock/interval syntax differs
+        # between the production database and the SQLite harness the test
+        # suite drives, and this comparison must behave identically in both.
+        updated = row["updated_at"]
+        if updated is None:
+            return None
+        now = datetime.now(updated.tzinfo) if updated.tzinfo else datetime.utcnow()
+        if (now - updated).total_seconds() > int(within_seconds):
+            return None
+        return {"id": row["id"], "domain": row["domain"], "email": row["email"],
+                "name": row["name"], "status": row["status"],
+                "updated_at": row["updated_at"]}
 
 
 async def claim_lead_task(task_id: int, observed_updated_at: Any) -> bool:

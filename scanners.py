@@ -1,6 +1,7 @@
 import subprocess
 import json
 import asyncio
+import os
 import time
 import socket
 import ssl
@@ -93,7 +94,7 @@ def _plain_probe(host: str) -> Dict:
     return result
 
 
-async def probe_live_hosts(subdomains: List[str]) -> List[Dict]:
+async def probe_live_hosts(subdomains: List[str], deadline: float = None) -> List[Dict]:
     """Agent 1b: HTTP Probing (httpx, plain-GET fallback when absent)."""
     if not subdomains:
         return []
@@ -122,16 +123,24 @@ async def probe_live_hosts(subdomains: List[str]) -> List[Dict]:
     if not live_hosts and subdomains:
         # httpx missing or silent-failed: probe a bounded number of hosts
         # with plain GETs (sequential, one connection each - no hammering).
+        # Each host can cost two 12s timeouts, so the wall-clock deadline is
+        # what keeps this stage from eating the whole serverless invocation.
         loop = asyncio.get_running_loop()
+        probed = 0
         for host in subdomains[:25]:
+            if deadline is not None and time.monotonic() > deadline:
+                print(f"[SCOUT] probe budget spent after {probed} host(s)")
+                break
             res = await loop.run_in_executor(None, _plain_probe, host)
+            probed += 1
             if res["status_code"]:
                 live_hosts.append(res)
         if live_hosts:
             print(f"[SCOUT] plain-GET fallback found {len(live_hosts)} live host(s)")
     return live_hosts
 
-async def passive_surface_checks(domain: str, live_hosts: List[Dict]) -> List[Dict]:
+async def passive_surface_checks(domain: str, live_hosts: List[Dict],
+                                 deadline: float = None) -> List[Dict]:
     """Evidence-based, non-intrusive observations used when nuclei is absent.
 
     These are NOT vulnerability claims: they record what an unauthenticated
@@ -141,6 +150,8 @@ async def passive_surface_checks(domain: str, live_hosts: List[Dict]) -> List[Di
     """
     findings: List[Dict] = []
     for host in live_hosts[:5]:
+        if deadline is not None and time.monotonic() > deadline:
+            break
         url = host.get("url")
         if not url:
             continue
@@ -197,7 +208,8 @@ def u_ssl_is_https(url: str) -> bool:
     return url.lower().startswith("https://")
 
 
-async def scan_vulnerabilities(live_hosts: List[Dict]) -> List[Dict]:
+async def scan_vulnerabilities(live_hosts: List[Dict],
+                                deadline: float = None) -> List[Dict]:
     """Agent 1c: Nuclei Vulnerability Scanning (passive fallback when absent)."""
     if not live_hosts:
         return []
@@ -208,7 +220,10 @@ async def scan_vulnerabilities(live_hosts: List[Dict]) -> List[Dict]:
         f.write("\n".join([h["url"] for h in live_hosts]))
         
     cmd = f"nuclei -l {urls_file} -severity critical,high -json -silent"
-    output = await run_subprocess(cmd, timeout=300)
+    # The scan shares one serverless deadline with everything else: a tool
+    # that needs longer than the time actually left would kill the analysis.
+    remaining = None if deadline is None else max(5, int(deadline - time.monotonic()))
+    output = await run_subprocess(cmd, timeout=min(300, remaining) if remaining else 300)
 
     vulns = []
     tool_missing = False
@@ -230,7 +245,7 @@ async def scan_vulnerabilities(live_hosts: List[Dict]) -> List[Dict]:
 
     if tool_missing:
         domain = (live_hosts[0].get("url") or "").split("://", 1)[-1].split("/", 1)[0]
-        vulns = await passive_surface_checks(domain, live_hosts)
+        vulns = await passive_surface_checks(domain, live_hosts, deadline=deadline)
         print(f"[SCOUT] nuclei unavailable - {len(vulns)} passive observation(s) recorded")
     return vulns
 
@@ -311,17 +326,25 @@ async def run_full_scan(domain: str) -> Dict:
 
     print(f"[SCOUT] Starting full scan for {domain}")
 
+    # Recon shares the serverless invocation's wall clock with the LLM phase
+    # that follows: without this budget a big domain's probing alone can run
+    # past the platform's execution limit and the whole analysis is killed
+    # before the Analyst ever runs.
+    deadline = time.monotonic() + int(os.getenv("SCAN_BUDGET_SECONDS", "100"))
+
     # 2. Subdomains
     subdomains = await scan_subdomains(domain)
 
     # 3. Live Hosts
-    live_hosts = await probe_live_hosts(subdomains)
+    live_hosts = await probe_live_hosts(subdomains, deadline=deadline)
 
     # 3. Vulnerabilities
-    vulns = await scan_vulnerabilities(live_hosts)
+    vulns = await scan_vulnerabilities(live_hosts, deadline=deadline)
 
-    # 4. TLS
-    tls_info = await check_tls(domain)
+    # 4. TLS (only if recon left the time for it)
+    tls_info = await check_tls(domain) if time.monotonic() < deadline else {}
+    if not tls_info:
+        tls_info = {"error": "skipped - scan budget spent during recon"}
 
     # 5. Structure & Trim for LLM
     raw_scan = {

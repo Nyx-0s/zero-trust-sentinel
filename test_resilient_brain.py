@@ -14,6 +14,7 @@ Run:  python test_resilient_brain.py
 """
 
 import asyncio
+import os
 import time
 import unittest
 from typing import Any, Dict, List, Optional
@@ -67,6 +68,36 @@ class RateLimiterTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_overspend_is_debited_not_ignored(self):
+        """A call that cost MORE than its hold must drain the bucket.
+
+        Refunding only was the 18:19 burst bug: three concurrent scans each
+        held 1,500, each actually spent ~4k+, and the bucket never noticed -
+        so we kept launching calls Groq had already counted against its
+        8,000 TPM and everything 429'd.
+        """
+        async def scenario():
+            bucket = GroqRateLimiter(max_tokens_per_minute=7500, call_cost=1500)
+            hold = await bucket.acquire(1500)
+            before = bucket.tokens
+            await bucket.settle(hold, FakeResponse("x", total_tokens=5200))
+            # (a sliver of refill accrues while the call is in flight)
+            self.assertAlmostEqual(bucket.tokens, before - 3700, delta=0.5)
+
+        asyncio.run(scenario())
+
+    def test_estimate_covers_prompt_plus_reasoning_allowance(self):
+        async def scenario():
+            bucket = GroqRateLimiter(max_tokens_per_minute=7500, call_cost=1500)
+            messages = [type("M", (), {"content": "x" * 4000})()]
+            estimate = bucket.estimate_call(messages)
+            # 4,000 chars ~= 1,000 prompt tokens + the reasoning allowance
+            self.assertGreaterEqual(estimate, 1000 + main.GROQ_COMPLETION_ALLOWANCE)
+            self.assertLessEqual(estimate, bucket.max_tokens)
+            self.assertGreater(bucket.estimate_call([]), 0)
+
+        asyncio.run(scenario())
+
     def test_disabled_limiter_never_waits(self):
         async def scenario():
             bucket = GroqRateLimiter(max_tokens_per_minute=0, call_cost=999999)
@@ -97,10 +128,54 @@ class RetryPolicyTests(unittest.TestCase):
         self.assertEqual(main._rate_limit_delay(Exception("429"), 1), 30.0)
         self.assertEqual(main._rate_limit_delay(Exception("429"), 5), 120.0)  # capped
 
+    def test_rate_limit_wait_is_bounded_by_the_invocation_budget(self):
+        """A cap that never lifts must YIELD, not sleep past the platform's
+        execution deadline (Vercel kills the function at 300s, which would
+        turn a rate-limited lead into a dead one)."""
+        main.app = FakeGraph([Exception("429 - Please try again in 120s"),
+                              Exception("429 - Please try again in 120s")])
+        saved = os.environ.get("RATE_LIMIT_MAX_WAIT")
+        # run_scan flips the shared client to the fallback model on the way to
+        # giving up; put it back so later tests see the primary.
+        model_state = (main._current_model, main.llm.model_name)
+        os.environ["RATE_LIMIT_MAX_WAIT"] = "10"
+        try:
+            with self.assertRaises(RuntimeError):
+                asyncio.run(main.run_scan("example.com"))
+        finally:
+            if saved is None:
+                os.environ.pop("RATE_LIMIT_MAX_WAIT", None)
+            else:
+                os.environ["RATE_LIMIT_MAX_WAIT"] = saved
+            main._current_model, main.llm.model_name = model_state
+
     def test_429_is_detected_and_other_errors_are_not(self):
         self.assertTrue(main._is_rate_limit_error(Exception("429 Many Requests")))
         self.assertTrue(main._is_rate_limit_error(Exception("Rate limit reached")))
         self.assertFalse(main._is_rate_limit_error(ValueError("bad payload")))
+
+    def test_rate_limit_switches_the_shared_client_to_the_other_model(self):
+        """Groq caps tokens per model per day, so a capped primary must hand
+        the scan to the sibling model instead of burning every retry."""
+        saved = (main._current_model, main.llm.model_name)
+        try:
+            main._current_model = main.GROQ_MODEL_PRIMARY
+            main.llm.model_name = main.GROQ_MODEL_PRIMARY
+            first = main.switch_model()
+            self.assertEqual(first, main.GROQ_MODEL_FALLBACK)
+            self.assertEqual(main.llm.model_name, main.GROQ_MODEL_FALLBACK)
+            # it toggles, so the primary is retried once it has budget again
+            self.assertEqual(main.switch_model(), main.GROQ_MODEL_PRIMARY)
+        finally:
+            main._current_model, main.llm.model_name = saved
+
+    def test_switch_is_a_no_op_when_only_one_model_is_configured(self):
+        saved = (main.GROQ_MODEL_FALLBACK, main._current_model, main.llm.model_name)
+        try:
+            main.GROQ_MODEL_FALLBACK = main.GROQ_MODEL_PRIMARY
+            self.assertIsNone(main.switch_model())
+        finally:
+            main.GROQ_MODEL_FALLBACK, main._current_model, main.llm.model_name = saved
 
     def test_run_scan_retries_429_then_succeeds(self):
         main.app = FakeGraph([
