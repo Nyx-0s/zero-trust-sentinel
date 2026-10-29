@@ -1513,7 +1513,7 @@ async def get_digital_twin(client_id: str) -> Dict[str, Any]:
 
 
 # -----------------------------------------------------------------------------
-# Business intelligence (founder-skill integration, vendor/founder-skill MIT)
+# Business intelligence (skills authored in business_intel.py)
 # -----------------------------------------------------------------------------
 
 class BusinessProjectRequest(BaseModel):
@@ -1546,7 +1546,11 @@ async def business_skills() -> Dict[str, Any]:
     return {
         "skills": business.get_registry(),
         "workflow": business.WORKFLOW_ORDER,
-        "vendor": "founder-skill (MIT), vendored at vendor/founder-skill",
+        # The playbook that informed these skills is an external reference
+        # only: instructions are authored in business_intel.py and nothing
+        # from that project ships with this product.
+        "instructions": "authored in business_intel.py (no external framework "
+                        "vendored or depended on)",
         "fingerprint": business.context_fingerprint(business.SENTINEL_CONTEXT_TEMPLATE),
     }
 

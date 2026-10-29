@@ -57,9 +57,6 @@ RUN npm install -g @anthropic-ai/claude-code \
 # Application code
 COPY *.py ./
 
-# Vendored founder-skill (MIT) powering /business/* - instructions + tools
-COPY vendor/founder-skill ./vendor/founder-skill
-
 # Harvey's tuned config + skills (read from the working directory)
 COPY harvey.yaml harvey_discovery.md ./
 COPY skills/ ./skills/

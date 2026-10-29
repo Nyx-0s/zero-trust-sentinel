@@ -197,7 +197,7 @@ async def init_db() -> None:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_trajectories_client_id ON trajectories(client_id)")
 
         # Business intelligence projects + their per-skill outputs
-        # (founder-skill integration; additive only - no existing table touched)
+        # (business intelligence; additive only - no existing table touched)
         await conn.execute("""CREATE TABLE IF NOT EXISTS business_projects (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
@@ -1034,7 +1034,7 @@ async def get_client(client_id: int) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Business intelligence (founder-skill integration)
+# Business intelligence
 # ---------------------------------------------------------------------------
 
 async def create_business_project(name: str,

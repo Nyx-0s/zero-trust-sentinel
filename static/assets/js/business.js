@@ -1,4 +1,4 @@
-// ===== Business intelligence (founder-skill integration) ====================
+// ===== Business intelligence (the cockpit's own skills) =====================
 // Talks to the same API_BASE as the scan flow. No secrets ship here: the
 // browser only ever sees skill ids, statuses and the documents it requests.
 (function () {

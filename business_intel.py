@@ -1,18 +1,21 @@
-"""Sentinel Business Intelligence - founder-skill integration.
+"""Sentinel Business Intelligence - the business cockpit's own skills.
 
-Wraps the eleven MIT-licensed skills vendored in ``vendor/founder-skill`` and
-exposes them to the FastAPI app as three honest capability classes:
+Eight analysis capabilities exposed to the FastAPI app as two honest
+capability classes:
 
-    tool      deterministic, standard-library scripts (no network, no model)
     llm       instruction-driven skills interpreted by the existing Groq
               adapter (main.llm) behind the existing GroqRateLimiter
     research  needs verifiable external sources; without supplied evidence the
               run stops with ``needs_research`` instead of inventing facts
 
-Design rules (Section 4 of the integration spec):
+The instructions in ``SKILL_INSTRUCTIONS`` are written in this repository.
+They were shaped by studying an external founder playbook as an ANALYSIS
+framework (offer, ICP, pricing, positioning, operations, launch), but no code
+from that project is vendored, copied or depended on here - it is not part of
+this product.
 
-* The model never chooses commands. Tool invocations are fixed argv lists
-  built from the registry below - never a shell, never model-provided paths.
+Design rules:
+
 * Model failure (missing key, exhausted quota, timeout) is recorded as a
   structured error. It is never replaced by generated content.
 * Research skills refuse to run without ``inputs.evidence`` (URLs/sources the
@@ -27,7 +30,6 @@ import asyncio
 import hashlib
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -40,43 +42,72 @@ from main import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
-VENDOR_SKILLS = REPO_ROOT / "vendor" / "founder-skill" / "skills"
 WORK_ROOT = Path(os.getenv("BUSINESS_WORK_DIR", str(REPO_ROOT / "business_work")))
 
-TOOL_TIMEOUT_SECONDS = int(os.getenv("BUSINESS_TOOL_TIMEOUT", "90"))
 LLM_TIMEOUT_SECONDS = int(os.getenv("BUSINESS_LLM_TIMEOUT", "120"))
 LLM_MAX_RETRIES = 3
 MAX_INPUT_BYTES = int(os.getenv("BUSINESS_MAX_INPUT_BYTES", "50000"))
 MAX_CONTEXT_BYTES = int(os.getenv("BUSINESS_MAX_CONTEXT_BYTES", "50000"))
 
-# Files compile.py assembles, in document order: skill id -> file inside founder/
-PLAN_SECTION_FILES = [
-    ("founder-board", "board.md"),
-    ("founder-competitors", "competitors.md"),
-    ("founder-consumer", "panel/results.md"),
-    ("founder-pricing", "pricing.md"),
-    ("founder-offer", "offer.md"),
-    ("founder-cfo", "cfo.md"),
-    ("founder-marketing", "marketing.md"),
-    ("founder-brand", "brand.md"),
-    ("founder-ops", "ops.md"),
-    ("founder-launch", "launch.md"),
-]
 
-# The canonical order from the upstream README.
+# The canonical order the workflow runs in.
 WORKFLOW_ORDER = [
     "founder-board",
     "founder-competitors",
-    "founder-consumer",
     "founder-pricing",
     "founder-offer",
-    "founder-cfo",
     "founder-marketing",
     "founder-brand",
     "founder-ops",
     "founder-launch",
-    "founder-plan",
 ]
+
+# Instructions are authored in this repository - see the module docstring.
+SKILL_INSTRUCTIONS: Dict[str, str] = {
+    "founder-board": (
+        "Score this business the way an unpaid board would: three members "
+        "with different biases (operator, customer, skeptic). Each names the "
+        "one thing that would kill the company in the next two quarters, the "
+        "evidence for it, and a vote (proceed / change course / stop). Weigh "
+        "facts from the context above; flag anything you assumed."),
+    "founder-competitors": (
+        "Map the competitive set strictly from the supplied evidence: for "
+        "each competitor state who they serve, their price or business "
+        "model, their strongest claim, and the gap this business can own. "
+        "Never name a competitor that is not in the evidence list, and never "
+        "quote a price that is not cited."),
+    "founder-pricing": (
+        "Derive a defensible price from willingness-to-pay signals in the "
+        "context and the value delivered (hours saved, risk reduced, money "
+        "protected). Give a good/better/best structure, the floor price "
+        "below which the offer is uneconomic, and say explicitly which "
+        "assumption would change the answer."),
+    "founder-offer": (
+        "Write the offer a stranger can act on in one sentence: who it is "
+        "for, what they get, how fast, at what price, with what risk "
+        "reversal. Then answer the top objections a sceptical buyer raises "
+        "with evidence from the context, not adjectives."),
+    "founder-marketing": (
+        "Choose positioning, two channels maximum, and a dated 30-day "
+        "campaign with an owner and a number per day. Cap the allowed "
+        "acquisition cost at what the unit economics in the context can "
+        "actually pay back; say so when the context has no economics yet."),
+    "founder-brand": (
+        "Name candidates, voice, promise and a look brief for this business. "
+        "Every name claim must be checkable (a test to run, not an adjective "
+        "to assert); include one sentence on what the brand must never say."),
+    "founder-ops": (
+        "Describe how the work actually runs: suppliers and tools with real "
+        "costs from the context, the weekly routine, the permits or "
+        "compliance checks that apply, and a risk register where each risk "
+        "has an owner and a trigger. Leave costs null when the context does "
+        "not state them."),
+    "founder-launch": (
+        "Design the cheapest real-world test first (what it proves, what it "
+        "costs, how long it runs), then a dated countdown and run sheet for "
+        "the launch itself: every step, its owner, and the metric that says "
+        "the launch worked or must stop."),
+}
 
 SKILLS: Dict[str, Dict[str, Any]] = {
     "founder-board": {
@@ -93,22 +124,12 @@ SKILLS: Dict[str, Dict[str, Any]] = {
         "summary": "Maps competitors from public sources with links. Requires "
                    "supplied evidence - no evidence, no output.",
     },
-    "founder-consumer": {
-        "title": "Buyer Panel",
-        "kind": "tool",
-        "requires_research": False,
-        "summary": "Deterministic persona dealing, answer validation and "
-                   "tallying (panel.py).",
-        "tool": {"script": "founder-consumer/panel.py",
-                 "ops": ["init", "prompts", "check", "save", "tally", "status"]},
-    },
     "founder-pricing": {
         "title": "Pricing Strategist",
-        "kind": "tool",
+        "kind": "llm",
         "requires_research": False,
-        "summary": "Van Westendorp price range from panel answers or a survey "
-                   "CSV (van_westendorp.py).",
-        "tool": {"script": "founder-pricing/van_westendorp.py"},
+        "summary": "Good/better/best structure, willingness-to-pay reasoning "
+                   "and the floor price below which the offer is uneconomic.",
     },
     "founder-offer": {
         "title": "Offer Architect",
@@ -116,14 +137,6 @@ SKILLS: Dict[str, Dict[str, Any]] = {
         "requires_research": False,
         "summary": "Builds the offer stack that answers the panel's top "
                    "objections.",
-    },
-    "founder-cfo": {
-        "title": "CFO",
-        "kind": "tool",
-        "requires_research": False,
-        "summary": "Unit economics: contribution, break-even, year-1 months, "
-                   "cash and payback (unit_economics.py).",
-        "tool": {"script": "founder-cfo/unit_economics.py"},
     },
     "founder-marketing": {
         "title": "Marketing Director",
@@ -152,14 +165,6 @@ SKILLS: Dict[str, Dict[str, Any]] = {
         "requires_research": False,
         "summary": "A cheap real-world test first, then a dated countdown and "
                    "run sheet.",
-    },
-    "founder-plan": {
-        "title": "Business Planner",
-        "kind": "tool",
-        "requires_research": False,
-        "summary": "Compiles every prior output into one plan with a computed "
-                   "verdict (compile.py).",
-        "tool": {"script": "founder-plan/compile.py"},
     },
 }
 
@@ -266,212 +271,6 @@ def workdir_for(project_id: int) -> Path:
     return path
 
 
-def _script_path(skill_id: str) -> Path:
-    """Resolve a registry script inside the vendored tree, or refuse."""
-    rel = SKILLS[skill_id].get("tool", {}).get("script")
-    if not rel:
-        raise SkillUnavailable(f"{skill_id} has no deterministic tool")
-    script = (VENDOR_SKILLS / rel).resolve()
-    if VENDOR_SKILLS.resolve() not in script.parents or script.suffix != ".py":
-        raise SkillUnavailable("registry script escapes the vendored tree")
-    if not script.is_file():
-        raise SkillUnavailable(f"vendored tool missing: {rel}")
-    return script
-
-
-def _skill_md(skill_id: str) -> str:
-    path = VENDOR_SKILLS / skill_id / "SKILL.md"
-    if not path.is_file():
-        raise SkillUnavailable(f"SKILL.md missing for {skill_id}")
-    # Bounded read: prompts must not grow without limit.
-    return path.read_text(encoding="utf-8")[:12000]
-
-
-def _write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-async def _exec(argv: List[str], cwd: Path,
-                 stdin_text: Optional[str] = None) -> Dict[str, Any]:
-    """Run one vendored script. Fixed argv, no shell, bounded time/output."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(cwd),
-            stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        payload = stdin_text.encode("utf-8") if stdin_text is not None else None
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=payload), timeout=TOOL_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError as exc:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
-        raise SkillUnavailable(
-            f"tool timed out after {TOOL_TIMEOUT_SECONDS}s") from exc
-    except FileNotFoundError as exc:
-        raise SkillUnavailable(f"interpreter not found: {argv[0]}") from exc
-
-    out = stdout.decode("utf-8", "replace")
-    err = stderr.decode("utf-8", "replace")
-    return {"rc": proc.returncode, "stdout": out, "stderr": err}
-
-
-# ---------------------------------------------------------------------------
-# Deterministic tools
-# ---------------------------------------------------------------------------
-
-async def _run_tool(skill_id: str, project_id: int, inputs: Dict[str, Any]) -> Dict[str, Any]:
-    founder = workdir_for(project_id)
-    script = _script_path(skill_id)
-    py = sys.executable or "python3"
-    meta: Dict[str, Any] = {"tool": script.name, "argv_kind": "fixed"}
-    content = ""
-    artifacts: List[str] = []
-
-    if skill_id == "founder-cfo":
-        numbers = inputs.get("numbers")
-        if not isinstance(numbers, dict):
-            raise SkillInputError(
-                "founder-cfo requires inputs.numbers (the numbers.json object)")
-        _check_size(numbers, MAX_INPUT_BYTES, "inputs.numbers")
-        _write_json(founder / "numbers.json", numbers)
-        res = await _exec([py, str(script), "numbers.json", "--out", "cfo.md"],
-                          cwd=founder)
-        if res["rc"] != 0:
-            raise SkillUnavailable(
-                "unit economics rejected the inputs: "
-                + (res["stderr"] or res["stdout"]).strip()[:500])
-        content = (founder / "cfo.md").read_text(encoding="utf-8")
-        artifacts.append("founder/cfo.md")
-
-    elif skill_id == "founder-consumer":
-        op = str(inputs.get("op", "status"))
-        if op not in SKILLS[skill_id]["tool"]["ops"]:
-            raise SkillInputError(
-                f"op must be one of {SKILLS[skill_id]['tool']['ops']}")
-        panel_dir = "panel"
-        if op == "init":
-            customer = inputs.get("customer")
-            pitch = inputs.get("pitch")
-            if not isinstance(customer, dict) or not isinstance(pitch, str):
-                raise SkillInputError(
-                    "panel init requires inputs.customer (object) and "
-                    "inputs.pitch (string)")
-            _check_size(customer, MAX_INPUT_BYTES, "inputs.customer")
-            _check_size(pitch, MAX_INPUT_BYTES, "inputs.pitch")
-            _write_json(founder / "customer.json", customer)
-            (founder / "pitch.md").write_text(pitch, encoding="utf-8")
-            n = inputs.get("n", 100)
-            if not isinstance(n, int) or not (1 <= n <= 500):
-                raise SkillInputError("n must be an integer between 1 and 500")
-            argv = [py, str(script), "--dir", panel_dir, "init",
-                    "--customer", "customer.json", "--pitch", "pitch.md",
-                    "--n", str(n)]
-            res = await _exec(argv, cwd=founder)
-            if res["rc"] != 0:
-                raise SkillUnavailable(
-                    "panel init failed: " + res["stderr"].strip()[:500])
-            content = res["stdout"].strip() or "panel initialised"
-            artifacts.append("founder/panel/")
-        elif op == "save":
-            buyer_id = inputs.get("id")
-            answer = inputs.get("answer")
-            if not isinstance(buyer_id, str) or not isinstance(answer, (dict, str)):
-                raise SkillInputError(
-                    "panel save requires inputs.id (buyer id string) and "
-                    "inputs.answer (object or markdown string)")
-            if not buyer_id.replace("-", "").replace("_", "").isalnum():
-                raise SkillInputError("buyer id must be alphanumeric")
-            _check_size(answer, MAX_INPUT_BYTES, "inputs.answer")
-            text = answer if isinstance(answer, str) else json.dumps(answer)
-            res = await _exec(
-                [py, str(script), "--dir", panel_dir, "save", buyer_id],
-                cwd=founder, stdin_text=text)
-            if res["rc"] != 0:
-                raise SkillUnavailable(
-                    "panel save failed: " + res["stderr"].strip()[:500])
-            content = res["stdout"].strip() or f"saved answer for {buyer_id}"
-        else:  # check / tally / status
-            argv = [py, str(script), "--dir", panel_dir, op]
-            if op == "tally" and inputs.get("out"):
-                out_name = str(inputs["out"])
-                if "/" in out_name or ".." in out_name:
-                    raise SkillInputError("out must be a plain file name")
-                argv += ["--out", out_name]
-            res = await _exec(argv, cwd=founder)
-            if res["rc"] != 0:
-                raise SkillUnavailable(
-                    f"panel {op} failed (no answers yet?): "
-                    + (res["stderr"] or res["stdout"]).strip()[:500])
-            content = res["stdout"].strip() or res["stderr"].strip()
-
-    elif skill_id == "founder-pricing":
-        price = inputs.get("price")
-        argv = [py, str(script)]
-        source = inputs.get("source", "panel/answers")
-        if isinstance(source, str) and ("/" not in source or ".." not in source):
-            src_path = founder / source
-        else:
-            raise SkillInputError("source must be a relative path under founder/")
-        if not src_path.exists():
-            raise SkillInputError(
-                "no panel answers found - run founder-consumer first or "
-                "supply inputs.source pointing at a survey folder/CSV")
-        argv.append(str(source))
-        if price is not None:
-            try:
-                argv += ["--price", str(float(price))]
-            except (TypeError, ValueError) as exc:
-                raise SkillInputError("price must be a number") from exc
-        argv += ["--out", "pricing.md"]
-        res = await _exec(argv, cwd=founder)
-        if res["rc"] != 0:
-            raise SkillUnavailable(
-                "pricing analysis failed: "
-                + (res["stderr"] or res["stdout"]).strip()[:500])
-        content = (founder / "pricing.md").read_text(encoding="utf-8")
-        artifacts.append("founder/pricing.md")
-
-    elif skill_id == "founder-plan":
-        # Materialise every completed prior output where compile.py expects it.
-        for prior in inputs.get("_prior", []):
-            pid_file = dict(PLAN_SECTION_FILES).get(prior.get("skill_id"))
-            if not pid_file or not prior.get("content"):
-                continue
-            target = founder / pid_file
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(str(prior["content"]), encoding="utf-8")
-            if prior.get("skill_id") == "founder-board":
-                # compile.py reads founder/idea.md for the plan's title.
-                (founder / "idea.md").write_text(
-                    str(prior["content"]), encoding="utf-8")
-        res = await _exec([py, str(script), "--dir", "."], cwd=founder)
-        if res["rc"] != 0:
-            raise SkillUnavailable(
-                "plan compilation failed: "
-                + (res["stderr"] or res["stdout"]).strip()[:500])
-        plan_path = founder / "business-plan.md"
-        if not plan_path.is_file():
-            raise SkillUnavailable("compiler produced no business-plan.md")
-        content = plan_path.read_text(encoding="utf-8")
-        artifacts.append("founder/business-plan.md")
-        meta["verdict"] = next(
-            (l.split("**", 2)[1].split(": ", 1)[1]
-             for l in content.splitlines()[:6] if l.startswith("**Verdict")),
-            "unknown")
-    else:  # pragma: no cover - registry and branch list are in sync
-        raise SkillUnavailable(f"{skill_id} has no tool implementation")
-
-    meta["artifacts"] = artifacts
-    return {"kind": "tool", "status": "complete", "content": content,
-            "output": {"artifacts": artifacts}, "error": None, "meta": meta}
-
-
 # ---------------------------------------------------------------------------
 # Instruction-driven skills (existing Groq adapter + rate limiter)
 # ---------------------------------------------------------------------------
@@ -494,7 +293,9 @@ def _research_evidence(inputs: Dict[str, Any]) -> List[Dict[str, str]]:
 def build_prompt(skill_id: str, context: Dict[str, Any],
                  inputs: Dict[str, Any], prior: List[Dict[str, Any]],
                  evidence: List[Dict[str, str]]) -> str:
-    skill_md = _skill_md(skill_id)
+    skill_md = SKILL_INSTRUCTIONS.get(skill_id, "").strip()
+    if not skill_md:
+        raise SkillUnavailable(f"no instructions authored for {skill_id}")
     prior_text = "\n\n".join(
         f"## {p.get('skill_id')}\n{str(p.get('content'))[:4000]}"
         for p in prior if p.get("content")) or "(none yet)"
@@ -622,10 +423,6 @@ async def run_skill(project_id: int, skill_id: str,
         }
 
     try:
-        if spec["kind"] == "tool":
-            if skill_id == "founder-plan":
-                inputs = dict(inputs, _prior=prior)
-            return await _run_tool(skill_id, project_id, inputs)
         result = await _run_llm(skill_id, context, inputs, prior, evidence)
         if evidence:
             result["meta"]["evidence_status"] = "supplied_by_user"

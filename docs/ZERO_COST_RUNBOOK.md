@@ -94,7 +94,7 @@ What `deploy.sh` does, in order (all steps are in the script):
    never echoed back.
 3. **Test gate:** `test_autopilot.py` (17 stages) + `test_resilient_brain.py`
    (rate limiter, 429 retry, failure persistence) + `test_business_intel.py`
-   (founder-skill integration). A red suite stops the deploy.
+   (business-intelligence suite). A red suite stops the deploy.
 4. `docker build` for the host architecture.
 5. `docker compose up -d` (db + api + worker).
 6. Waits for `GET /health` → 200, then **restarts the API container and waits
@@ -242,5 +242,5 @@ Run the suites locally before any cutover:
 ```bash
 python3 test_autopilot.py          # 15/15 stages
 python3 test_resilient_brain.py    # rate limiter + 429 retry + error persistence
-python3 test_business_intel.py     # founder-skill integration
+python3 test_business_intel.py     # business-intelligence suite
 ```

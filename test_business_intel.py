@@ -1,22 +1,23 @@
-"""Integration tests for the Sentinel business-intelligence module.
+"""Tests for Sentinel's business-intelligence module (business_intel.py).
 
-Covers (Section 7B of the integration spec):
-  * the vendored founder-skill tree: 11 skills, MIT licence, upstream tests,
-  * deterministic tools on valid and invalid fixtures,
-  * the research gate refusing to run without sources (and never calling the
-    model to paper over it),
-  * honest model-unavailable errors (no fabricated output),
-  * the full eleven-skill workflow producing a compiled plan,
-  * the /business API routes: validation, persistence hooks, 400/404 handling,
-  * the 500 handler not echoing internals.
+What this suite guards:
+
+  * the skill registry: ids, order, capability classes, input validation
+  * the project constraint that founder-skill is an ANALYSIS framework only -
+    no vendored copy, no runtime path into that repository anywhere in this
+    product's source
+  * honest failure: research skills refuse without supplied evidence, an
+    unconfigured model is reported as unavailable and never replaced by
+    generated content
+  * the workflow runs every registered skill in order and records each outcome
+  * the /business routes: validation, persistence seams, honest status codes
 
 Run:  python test_business_intel.py
 """
 
 import asyncio
 import json
-import shutil
-import subprocess
+import subprocess  # noqa: F401  (kept: the suite shells out for repo checks)
 import sys
 import unittest
 from pathlib import Path
@@ -24,15 +25,6 @@ from pathlib import Path
 import business_intel as bi
 
 REPO = Path(__file__).resolve().parent
-VENDOR = REPO / "vendor" / "founder-skill"
-SKILLS = VENDOR / "skills"
-EXAMPLE_NUMBERS = SKILLS / "founder-cfo" / "example.json"
-EXAMPLE_CUSTOMER = SKILLS / "founder-consumer" / "customer.example.json"
-EXAMPLE_PITCH = SKILLS / "founder-consumer" / "pitch.example.md"
-
-# Unique workdir project ids so tests never touch real project data.
-PANEL_PID = 910001
-PRICING_PID = 910002
 WORKFLOW_PID = 910003
 
 
@@ -40,192 +32,99 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class VendorTreeTests(unittest.TestCase):
-    def test_all_eleven_skills_and_instructions_exist(self):
-        for skill_id in bi.WORKFLOW_ORDER:
-            self.assertTrue((SKILLS / skill_id / "SKILL.md").is_file(),
-                            f"missing SKILL.md for {skill_id}")
-        self.assertEqual(len(bi.WORKFLOW_ORDER), 11)
+class NoVendoredFrameworkTests(unittest.TestCase):
+    """founder-skill may inform the analysis; it must never ship or run."""
+
+    def test_registry_is_self_contained(self):
         self.assertEqual(set(bi.WORKFLOW_ORDER), set(bi.SKILLS))
+        self.assertTrue((REPO / "business_intel.py").is_file())
+        # Instructions live in this module, not in files from another repo.
+        for skill_id in bi.WORKFLOW_ORDER:
+            self.assertIn(skill_id, bi.SKILL_INSTRUCTIONS)
+            self.assertTrue(bi.SKILL_INSTRUCTIONS[skill_id].strip(),
+                            f"empty instructions for {skill_id}")
 
-    def test_mit_licence_retained_with_upstream_copyright(self):
-        licence = (VENDOR / "LICENSE").read_text(encoding="utf-8")
-        self.assertIn("MIT License", licence)
-        self.assertIn("Jake Schincariol", licence)
-        vendor_md = (VENDOR / "VENDOR.md").read_text(encoding="utf-8")
-        self.assertIn("Jakeschincariol/founder-skill", vendor_md)
-        self.assertIn("fd9385b0", vendor_md)
+    def test_module_never_reads_an_external_skill_tree(self):
+        src = (REPO / "business_intel.py").read_text(encoding="utf-8")
+        for marker in ("vendor/founder-skill", "VENDOR_SKILLS", "_skill_md",
+                       "_run_tool", "_script_path"):
+            self.assertNotIn(marker, src,
+                             f"{marker} reintroduces the dependency")
 
-    def test_upstream_test_suite_passes_unmodified(self):
-        proc = subprocess.run(
-            [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-            cwd=str(VENDOR), capture_output=True, text=True, timeout=180)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("OK", proc.stderr + proc.stdout)
+    def test_no_product_source_references_the_external_repo(self):
+        """Python, JS, HTML, Dockerfile: nothing may point at that tree."""
+        patterns = ("vendor/founder-skill", "founder-skill.git")
+        checked = 0
+        skip = {".git", ".venv", "node_modules", "business_work", "__pycache__"}
+        for path in REPO.rglob("*"):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            if any(part in skip for part in path.parts):
+                continue
+            if path.suffix not in (".py", ".js", ".html", ".css", ".md",
+                                   ".yml", ".yaml", ".json", "") and \
+                    path.name != "Dockerfile":
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            checked += 1
+            for marker in patterns:
+                if marker in text and path.name != "test_business_intel.py":
+                    self.fail(f"{path.relative_to(REPO)} references {marker}")
+        self.assertGreater(checked, 10, "the source sweep found nothing to read")
 
-    def test_tools_are_python38_compatible_standard_library_scripts(self):
-        for rel in ("founder-cfo/unit_economics.py",
-                    "founder-consumer/panel.py",
-                    "founder-pricing/van_westendorp.py",
-                    "founder-plan/compile.py"):
-            path = SKILLS / rel
-            src = path.read_text(encoding="utf-8")
-            self.assertNotIn("import requests", src)
-            compile(src, str(path), "exec")   # syntax check on this interpreter
+    def test_vendored_tree_is_not_shipped(self):
+        self.assertFalse((REPO / "vendor" / "founder-skill").exists(),
+                         "the external framework must not be vendored")
 
 
 class RegistryTests(unittest.TestCase):
     def test_registry_kinds_and_order(self):
         reg = bi.get_registry()
-        self.assertEqual(len(reg), 11)
+        self.assertEqual(len(reg), len(bi.WORKFLOW_ORDER))
         self.assertEqual([s["id"] for s in reg], bi.WORKFLOW_ORDER)
         kinds = {s["id"]: s["kind"] for s in reg}
         self.assertEqual(kinds["founder-competitors"], "research")
-        for tool in ("founder-consumer", "founder-pricing",
-                     "founder-cfo", "founder-plan"):
-            self.assertEqual(kinds[tool], "tool")
-        for llm_skill in ("founder-board", "founder-offer", "founder-marketing",
-                          "founder-brand", "founder-ops", "founder-launch"):
-            self.assertEqual(kinds[llm_skill], "llm")
+        for skill_id, kind in kinds.items():
+            self.assertIn(kind, ("llm", "research"),
+                          f"{skill_id} must not require an external tool")
+        # The first analysis step is the board; launch closes the sequence.
+        self.assertEqual(bi.WORKFLOW_ORDER[0], "founder-board")
+        self.assertEqual(bi.WORKFLOW_ORDER[-1], "founder-launch")
 
     def test_unknown_skill_is_rejected(self):
         with self.assertRaises(bi.SkillInputError):
             bi.validate_skill_id("founder-definitely-not")
 
-    def test_registry_scripts_cannot_escape_the_vendor_tree(self):
-        for skill_id, spec in bi.SKILLS.items():
-            if "tool" not in spec:
-                continue
-            path = bi._script_path(skill_id)
-            self.assertTrue(str(path).startswith(str(SKILLS.resolve())))
-        # A hostile registry entry is refused, not executed.
-        original = dict(bi.SKILLS["founder-cfo"]["tool"])
-        bi.SKILLS["founder-cfo"]["tool"]["script"] = "../../../etc/passwd"
-        try:
-            with self.assertRaises(bi.SkillUnavailable):
-                bi._script_path("founder-cfo")
-        finally:
-            bi.SKILLS["founder-cfo"]["tool"] = original
-
     def test_oversized_inputs_are_rejected(self):
         with self.assertRaises(bi.SkillInputError):
-            run(bi.run_skill(PANEL_PID, "founder-cfo", {},
-                             {"numbers": {"pad": "x" * (bi.MAX_INPUT_BYTES + 100)}}))
+            run(bi.run_skill(910003, "founder-board", {},
+                             {"pad": "x" * (bi.MAX_INPUT_BYTES + 100)}))
+
+    def test_every_skill_has_a_summary_for_the_cockpit(self):
+        for skill_id, spec in bi.SKILLS.items():
+            self.assertTrue(spec.get("summary"), skill_id)
+            self.assertTrue(spec.get("title"), skill_id)
 
 
-def setUpModule():
-    # The tests in this module chain deliberately (init -> save -> tally ->
-    # pricing -> plan), so they must share one run, but never two runs:
-    # panel answers left on disk from a previous run would make the
-    # "no answers yet" honesty check pass for the wrong reason.
-    for pid in (PANEL_PID, PRICING_PID, WORKFLOW_PID,
-                910010, 910011, 910012, 910020, 910021, 910022):
-        shutil.rmtree(bi.workdir_for(pid), ignore_errors=True)
+class PromptTests(unittest.TestCase):
+    def test_prompt_carries_instructions_context_and_hard_rules(self):
+        prompt = bi.build_prompt(
+            "founder-offer", bi.SENTINEL_CONTEXT_TEMPLATE,
+            {"note": "x"}, [], [{"url": "https://example.com", "note": "price"}])
+        self.assertIn(bi.SKILL_INSTRUCTIONS["founder-offer"], prompt)
+        self.assertIn("Zero-Trust Sentinel", prompt)
+        self.assertIn("Never invent customers", prompt)
+        self.assertIn("https://example.com", prompt)
+
+    def test_missing_instructions_fail_honestly(self):
+        with self.assertRaises(bi.SkillUnavailable):
+            bi.build_prompt("not-a-real-skill", {}, {}, [], [])
 
 
-class DeterministicToolTests(unittest.TestCase):
-    def test_unit_economics_correct_on_known_inputs(self):
-        numbers = json.loads(EXAMPLE_NUMBERS.read_text(encoding="utf-8"))
-        # Independent arithmetic: 6.50 - (0.92 + 0.38 + 0.24 + 0.20) = 4.76
-        price = numbers["price"]
-        variable = sum(v["cost"] for v in numbers["variable"])
-        self.assertAlmostEqual(price - variable, 4.76, places=2)
-
-        result = run(bi.run_skill(910010, "founder-cfo", {},
-                                  {"numbers": numbers}))
-        self.assertEqual(result["status"], "complete", result.get("error"))
-        self.assertIn("4.76", result["content"])
-        self.assertIn("6.50", result["content"])
-        self.assertEqual(result["kind"], "tool")
-
-    def test_unit_economics_rejects_invalid_input_honestly(self):
-        result = run(bi.run_skill(910011, "founder-cfo", {},
-                                  {"numbers": {"business": "x"}}))
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["content"], "")           # nothing fabricated
-        self.assertIn("'price' is missing", result["error"])
-        self.assertIn("rejected the inputs", result["error"])
-
-    def test_panel_init_status_and_tally_without_answers(self):
-        customer = json.loads(EXAMPLE_CUSTOMER.read_text(encoding="utf-8"))
-        pitch = EXAMPLE_PITCH.read_text(encoding="utf-8")
-        init = run(bi.run_skill(PANEL_PID, "founder-consumer", {},
-                                {"op": "init", "customer": customer,
-                                 "pitch": pitch, "n": 6}))
-        self.assertEqual(init["status"], "complete", init.get("error"))
-        self.assertIn("6 buyers", init["content"])
-
-        status = run(bi.run_skill(PANEL_PID, "founder-consumer", {}, {}))
-        self.assertEqual(status["status"], "complete", status.get("error"))
-        self.assertIn("buyers dealt", status["content"])
-
-        # No answers yet: an honest failure, not an invented tally.
-        tally = run(bi.run_skill(PANEL_PID, "founder-consumer", {},
-                                 {"op": "tally"}))
-        self.assertEqual(tally["status"], "failed")
-        self.assertEqual(tally["content"], "")
-
-    def test_panel_saves_valid_answers_then_tallies(self):
-        founder = bi.workdir_for(PANEL_PID)
-        personas = json.loads((founder / "panel" / "personas.json")
-                               .read_text(encoding="utf-8"))
-        reason = sorted(_panel_reasons())[0]
-        for persona in personas:
-            answer = {
-                "id": persona["id"],
-                "buys": True,
-                "purchases_first_month": 4,
-                "reason_code": reason,
-                "reason": "I buy coffee most days anyway.",
-                "objection": "the queue at my usual place",
-                "would_change_my_mind": "a loyalty card",
-                "price_too_cheap": 3.0,
-                "price_cheap": 5.5,
-                "price_expensive": 7.5,
-                "price_too_expensive": 9.0,
-            }
-            saved = run(bi.run_skill(PANEL_PID, "founder-consumer", {},
-                                     {"op": "save", "id": persona["id"],
-                                      "answer": answer}))
-            self.assertEqual(saved["status"], "complete", saved.get("error"))
-
-        tally = run(bi.run_skill(PANEL_PID, "founder-consumer", {},
-                                 {"op": "tally"}))
-        self.assertEqual(tally["status"], "complete", tally.get("error"))
-        self.assertTrue((founder / "panel" / "results.json").is_file())
-
-    def test_pricing_reads_real_answers_and_refuses_missing_ones(self):
-        founder = bi.workdir_for(PANEL_PID)
-        self.assertTrue((founder / "panel" / "answers").is_dir())
-        result = run(bi.run_skill(PANEL_PID, "founder-pricing", {},
-                                  {"price": 6.50}))
-        self.assertEqual(result["status"], "complete", result.get("error"))
-        self.assertIn("6.50", result["content"])
-
-        missing = run(bi.run_skill(PRICING_PID, "founder-pricing", {},
-                                   {"price": 6.50}))
-        self.assertEqual(missing["status"], "failed")
-        self.assertIn("panel answers", missing["error"])
-        self.assertEqual(missing["content"], "")
-
-    def test_compile_handles_missing_directory_safely(self):
-        result = run(bi.run_skill(910012, "founder-plan", bi.SENTINEL_CONTEXT_TEMPLATE))
-        self.assertEqual(result["status"], "complete", result.get("error"))
-        self.assertIn("**Verdict:", result["content"])
-        self.assertIn("Incomplete", result["content"])
-
-
-def _panel_reasons():
-    """Reason codes the vendored panel accepts (read from the tool itself)."""
-    import importlib.util
-    path = SKILLS / "founder-consumer" / "panel.py"
-    spec = importlib.util.spec_from_file_location("zds_panel", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return list(mod.REASONS)
-
-
-class HonestyGateTests(unittest.TestCase):
+class HonestyTests(unittest.TestCase):
     def test_research_skill_refuses_without_evidence_and_never_calls_model(self):
         async def exploding(*a, **k):
             raise AssertionError("model must not be called without evidence")
@@ -275,44 +174,21 @@ class HonestyGateTests(unittest.TestCase):
         self.assertTrue(result["error"].startswith("model_unavailable"))
         self.assertEqual(result["content"], "")
 
+    def test_context_fingerprint_is_stable(self):
+        first = bi.context_fingerprint(bi.SENTINEL_CONTEXT_TEMPLATE)
+        second = bi.context_fingerprint(bi.SENTINEL_CONTEXT_TEMPLATE)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 16)
+
 
 class WorkflowTests(unittest.TestCase):
-    def test_full_workflow_produces_a_compiled_plan(self):
-        # 1. deterministic prep: a real panel with real answers
-        customer = json.loads(EXAMPLE_CUSTOMER.read_text(encoding="utf-8"))
-        pitch = EXAMPLE_PITCH.read_text(encoding="utf-8")
-        run(bi.run_skill(WORKFLOW_PID, "founder-consumer", {},
-                         {"op": "init", "customer": customer,
-                          "pitch": pitch, "n": 6}))
-        founder = bi.workdir_for(WORKFLOW_PID)
-        personas = json.loads((founder / "panel" / "personas.json")
-                              .read_text(encoding="utf-8"))
-        reason = sorted(_panel_reasons())[0]
-        for persona in personas:
-            run(bi.run_skill(WORKFLOW_PID, "founder-consumer", {},
-                             {"op": "save", "id": persona["id"], "answer": {
-                                 "id": persona["id"], "buys": True,
-                                 "purchases_first_month": 3,
-                                 "reason_code": reason,
-                                 "reason": "habit", "objection": "price",
-                                 "would_change_my_mind": "",
-                                 "price_too_cheap": 3.0, "price_cheap": 5.0,
-                                 "price_expensive": 7.0,
-                                 "price_too_expensive": 9.0}}))
+    def test_workflow_runs_every_skill_in_order_and_records_each(self):
+        stored = {}
 
-        # 2. stub the model so the workflow test is deterministic and offline
         async def fake_llm(skill_id, context, inputs, prior, evidence):
             return {"kind": "llm", "status": "complete",
                     "content": f"# {skill_id}\n\nFixture document.",
                     "output": {}, "error": None, "meta": {"generated_by": "llm"}}
-
-        numbers = json.loads(EXAMPLE_NUMBERS.read_text(encoding="utf-8"))
-        inputs = {
-            "founder-consumer": {"op": "check"},
-            "founder-pricing": {"price": 6.50},
-            "founder-cfo": {"numbers": numbers},
-        }
-        stored = {}
 
         async def fetch_prior(pid):
             return [dict(v, skill_id=k) for k, v in stored.items()]
@@ -320,33 +196,30 @@ class WorkflowTests(unittest.TestCase):
         async def recorder(skill_id, result):
             stored[skill_id] = result
 
-        original_llm, original_hook = bi._run_llm, None
+        original_llm = bi._run_llm
         bi._run_llm = fake_llm
         bi.set_recorder(recorder)
         try:
             results = run(bi.run_workflow(WORKFLOW_PID,
                                           bi.SENTINEL_CONTEXT_TEMPLATE,
-                                          inputs, fetch_prior=fetch_prior))
+                                          {}, fetch_prior=fetch_prior))
         finally:
             bi._run_llm = original_llm
             bi.set_recorder(None)
 
-        self.assertEqual(len(results), 11)
+        self.assertEqual(len(results), len(bi.WORKFLOW_ORDER))
+        self.assertEqual([r["skill_id"] for r in results], bi.WORKFLOW_ORDER)
         by_id = {r["skill_id"]: r for r in results}
-        for skill_id in ("founder-board", "founder-cfo", "founder-pricing",
-                         "founder-plan", "founder-marketing"):
-            self.assertEqual(by_id[skill_id]["status"], "complete",
-                             f"{skill_id}: {by_id[skill_id].get('error')}")
-        # competitors honestly stayed gated (no evidence supplied)
-        self.assertEqual(by_id["founder-competitors"]["status"], "needs_research")
-
-        plan = by_id["founder-plan"]["content"]
-        self.assertIn("**Verdict:", plan)
-        self.assertIn("The numbers", plan)
-        self.assertIn("4.76", plan)          # real CFO numbers made the plan
-        self.assertIn("## Marketing", plan)  # an LLM section made it in
-        self.assertIn("Fixture document.", plan)
-        self.assertIn("run /founder-competitors", plan)  # honest gap listing
+        for skill_id in bi.WORKFLOW_ORDER:
+            if skill_id == "founder-competitors":
+                # no evidence supplied: honestly gated, never invented
+                self.assertEqual(by_id[skill_id]["status"], "needs_research")
+            else:
+                self.assertEqual(by_id[skill_id]["status"], "complete",
+                                 f"{skill_id}: {by_id[skill_id].get('error')}")
+                self.assertIn("Fixture document.", by_id[skill_id]["content"])
+        # every outcome was persisted through the recorder seam
+        self.assertEqual(set(stored), set(bi.WORKFLOW_ORDER))
 
 
 class ApiRouteTests(unittest.TestCase):
@@ -419,8 +292,9 @@ class ApiRouteTests(unittest.TestCase):
         res = self.client.get("/business/skills")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(len(data["skills"]), 11)
+        self.assertEqual(len(data["skills"]), len(bi.WORKFLOW_ORDER))
         self.assertNotIn("/Users/", res.text)      # no host file-system paths
+        self.assertNotIn("vendor/founder-skill", res.text)
 
     def test_02_context_template(self):
         res = self.client.get("/business/context-template")
@@ -454,10 +328,10 @@ class ApiRouteTests(unittest.TestCase):
         res = self.client.post(f"/business/projects/{pid}/run",
                                json={"skill_id": "workflow"})
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(len(res.json()["skills"]), 11)
+        self.assertEqual(len(res.json()["skills"]), len(bi.WORKFLOW_ORDER))
         state = self.client.get(f"/business/projects/{pid}").json()
         statuses = {o["skill_id"]: o["status"] for o in state["outputs"]}
-        self.assertEqual(len(statuses), 11)
+        self.assertEqual(len(statuses), len(bi.WORKFLOW_ORDER))
         self.assertTrue(all(s in ("pending", "running", "complete",
                                   "failed", "needs_research")
                             for s in statuses.values()))
