@@ -17,6 +17,7 @@ from db import (
     get_latest_report_by_domain,
     mark_stage_sent,
     has_stage_sent,
+    has_stage_sent_for_email,
     count_sends_today,
 )
 from utils import unsubscribe_token
@@ -206,6 +207,12 @@ class OutboundEngine:
 
             # Skip if already sent at this stage
             if await has_stage_sent(lead["id"], stage):
+                continue
+            # ...or at this stage to this same mailbox via another lead row
+            # (discovery re-opening a domain must not double-mail a contact).
+            if await has_stage_sent_for_email(lead["email"], stage):
+                print(f"[SKIP] {lead['email']} already got '{stage}' on another "
+                      f"lead for {lead['domain']}")
                 continue
 
             domain = lead["domain"]

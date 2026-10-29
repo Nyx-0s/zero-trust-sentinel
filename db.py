@@ -839,6 +839,26 @@ async def has_stage_sent(lead_id: int, stage: str) -> bool:
         return row is not None
 
 
+async def has_stage_sent_for_email(email: str, stage: str) -> bool:
+    """True when this mailbox already received this stage on ANY lead row.
+
+    lead_stages is keyed by lead id, and discovery regularly opens a second
+    lead for the same company - so checking the id alone mails the same
+    published address twice, which is precisely what a sender must never do
+    to its own reputation.
+    """
+    if not email:
+        return False
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM lead_stages s JOIN lead_tasks t ON t.id = s.lead_id "
+            "WHERE lower(t.email) = lower($1) AND s.stage = $2 LIMIT 1",
+            email, stage,
+        )
+        return row is not None
+
+
 async def suppress_lead(lead_id: int, reason: str = "unsubscribed") -> None:
     """Suppresses a lead from all future sends."""
     pool = await get_pool()
