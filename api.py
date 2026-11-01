@@ -166,10 +166,18 @@ def _paypal_api_base() -> str:
     return "https://api-m.paypal.com"
 
 
+# Set only after init_db() succeeds: health reports the inbound/handoff
+# features as available on the strength of the schema actually existing,
+# not merely because the code was deployed.
+_DB_READY = False
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database on startup."""
+    global _DB_READY
     await init_db()
+    _DB_READY = True
 
 
 class ScanRequest(BaseModel):
@@ -1182,22 +1190,33 @@ async def paypal_webhook(request: Request) -> Dict[str, Any]:
     return {"received": True}
 
 
-async def send_win_back_email(client_id):
-    """
-    Sends a personalized win-back email with specific risk data.
+async def send_win_back_email(client_id) -> bool:
+    """Sends a personalized win-back email with specific risk data.
+
+    Returns True ONLY when the provider accepted the message. Callers must
+    not mark the stage as sent on a False return - a rejected send would
+    otherwise be recorded as delivered and never retried.
+
     Accepts a client id as int or numeric string (Stripe metadata).
     """
-    from db import get_client as db_get_client
+    from db import get_client as db_get_client, mailbox_state, is_suppressed
     client_id = _coerce_client_id(client_id)
     if client_id is None:
-        return
+        return False
     client = await db_get_client(client_id)
     if not client:
-        return
+        return False
 
     domain = client.get("domain")
     email = client.get("email")
     name = client.get("name", "there")
+
+    # Suppressed or already-replied mailboxes must never receive automated
+    # mail - including lifecycle win-back. Same gate the outbound engine uses.
+    if email:
+        if await is_suppressed(email) or await mailbox_state(email):
+            print(f"[WIN-BACK SKIP] {email} is suppressed/replied")
+            return False
 
     # Get the latest report for specific risk data
     from db import get_latest_report
@@ -1258,9 +1277,14 @@ Zero-Trust Sentinel
 
     if not SENDGRID_API_KEY and not RESEND_API_KEY:
         print("[WARN] SENDGRID_API_KEY/RESEND_API_KEY not set, win-back email skipped")
-        return
+        return False
+    if not email:
+        print(f"[WIN-BACK SKIP] client {client_id} has no email")
+        return False
 
     html = body.replace("\n", "<br>")
+    # Same Reply-To the engine uses: replies must reach the monitored inbox.
+    reply_to = os.getenv("REPLY_TO", "aryan.ahlawat@rftsystems.com")
     if SENDGRID_API_KEY:
         # SendGrid v3 mail/send - answers 202 Accepted
         url = "https://api.sendgrid.com/v3/mail/send"
@@ -1268,6 +1292,7 @@ Zero-Trust Sentinel
         payload = {
             "personalizations": [{"to": [{"email": email}]}],
             "from": {"email": FROM_EMAIL},
+            "reply_to": {"email": reply_to},
             "subject": subject,
             "content": [{"type": "text/html", "value": html}],
         }
@@ -1279,6 +1304,7 @@ Zero-Trust Sentinel
             "to": [email],
             "subject": subject,
             "html": html,
+            "reply_to": reply_to,
         }
 
     async with httpx.AsyncClient() as client_http:
@@ -1286,10 +1312,12 @@ Zero-Trust Sentinel
             response = await client_http.post(url, headers=headers, json=payload)
             if response.status_code in (200, 202):   # SendGrid answers 202
                 print(f"[WIN-BACK EMAIL] Sent to {email}")
-            else:
-                print(f"[WIN-BACK EMAIL FAIL] {response.status_code}: {response.text}")
+                return True
+            print(f"[WIN-BACK EMAIL FAIL] {response.status_code}: {response.text}")
+            return False
         except Exception as e:
             print(f"[WIN-BACK EMAIL ERROR] {e}")
+            return False
 
 
 @app.get("/task/{task_id}")
@@ -1750,11 +1778,20 @@ async def ops_summary() -> Any:
         "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je"),
         "inline_scan": INLINE_SCAN,
         "holds": holds,
+        # Additive, gated on the schema having been created successfully.
+        "inbound_webhook": bool(_DB_READY),
+        "handoffs_enabled": bool(_DB_READY),
     }
-    out["not_tracked"] = [
-        "replies / conversations (Reply-To lands in a monitored mailbox; no inbound-parse route is configured yet)",
-        "bounces arrive via SendGrid suppression sync on each cron batch, not in real time",
-    ]
+    out["not_tracked"] = []
+    if (os.getenv("SENDGRID_INBOUND_PARSE") or "").strip().lower() \
+            not in ("1", "true", "yes"):
+        out["not_tracked"].append(
+            "replies / conversations (POST /webhook/sendgrid/inbound is live; "
+            "point SendGrid Inbound Parse at it and they will be tracked here)")
+    out["not_tracked"].append(
+        "bounces arrive via SendGrid suppression sync on each cron batch, "
+        "not in real time (the event webhook at /webhook/sendgrid/events "
+        "makes them real time when configured)")
     return out
 
 
@@ -1766,12 +1803,20 @@ async def unsubscribe(lead: int, token: str) -> Any:
     excludes suppressed rows) and blocks re-capture with the same address.
     """
     from utils import verify_unsubscribe_token
-    from db import suppress_lead
+    from db import suppress_lead, suppress_mailbox, get_lead_task
     if not verify_unsubscribe_token(lead, token):
         return JSONResponse(status_code=403,
                             content={"error": "invalid unsubscribe token"})
-    await suppress_lead(lead, "unsubscribed")
-    print(f"[UNSUBSCRIBE] lead {lead} opted out")
+    # Mailbox-wide: discovery opens sibling lead rows for the same address,
+    # and a one-click opt-out has to bind them all - not just this row.
+    row = await get_lead_task(lead)
+    email = (row or {}).get("email") or ""
+    if email:
+        await suppress_mailbox(email, "unsubscribed")
+    else:
+        await suppress_lead(lead, "unsubscribed")
+    print(f"[UNSUBSCRIBE] lead {lead} opted out"
+          + (f" (mailbox {email})" if email else ""))
     return {"status": "unsubscribed", "lead": lead}
 
 
@@ -1868,7 +1913,131 @@ async def health_check() -> Dict[str, Any]:
     return {"status": "healthy", "service": "zero-trust-sentinel",
             "llm_configured": bool(LLM_CONFIGURED),
             "email_sender": sender,
-            "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")}
+            "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je"),
+            # Additive: present only once the schema (inbound_messages,
+            # handoffs) is known to exist - older callers ignore extra keys.
+            "inbound_webhook": bool(_DB_READY),
+            "handoffs_enabled": bool(_DB_READY)}
+
+
+# -----------------------------------------------------------------------------
+# Inbound reply loop: SendGrid webhooks + the ops queue behind CRON_SECRET.
+#
+# The webhook is intentionally raw-body (request.body()), not request.form():
+# python-multipart is not installed here, and inbound.parse_sendgrid_inbound
+# handles both urlencoded and multipart payloads byte-for-byte itself.
+# -----------------------------------------------------------------------------
+
+def _inbound_secret_from(request: Request) -> str:
+    """Shared secret for the SendGrid routes: header or query string.
+
+    SendGrid Inbound Parse can only hit a URL (no custom headers), so
+    ?secret= is the workable mode there; the event webhook can use either.
+    """
+    return (request.headers.get("X-Inbound-Secret")
+            or request.query_params.get("secret") or "")
+
+
+@app.post("/webhook/sendgrid/inbound")
+async def sendgrid_inbound_webhook(request: Request) -> Any:
+    """SendGrid Inbound Parse -> correlate, classify, stop follow-ups.
+
+    Returns the stored outcome. A replayed delivery (same external id)
+    reports duplicate=True and re-runs no side effects, so SendGrid's
+    retries are safe. 403 when INBOUND_WEBHOOK_SECRET is set and the
+    provided secret does not match (constant-time).
+    """
+    from inbound import parse_sendgrid_inbound, process_inbound, webhook_secret_ok
+    if not webhook_secret_ok(_inbound_secret_from(request)):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    raw = await request.body()
+    if not raw:
+        return JSONResponse(status_code=400, content={"error": "empty body"})
+    # Unbounded bodies are a cheap DoS; Inbound Parse messages are small.
+    if len(raw) > 2 * 1024 * 1024:
+        return JSONResponse(status_code=413, content={"error": "payload too large"})
+    parsed = parse_sendgrid_inbound(
+        raw, request.headers.get("content-type") or "")
+    if not parsed.get("from_address") and not parsed.get("body") and not parsed.get("subject"):
+        # Junk / empty-parse: acknowledge so SendGrid stops retrying, but
+        # store nothing and leak nothing.
+        return {"received": True, "skipped": True, "reason": "no inbound fields"}
+    return await process_inbound(parsed, source="sendgrid")
+
+
+@app.post("/webhook/sendgrid/events")
+async def sendgrid_events_webhook(request: Request) -> Any:
+    """SendGrid Event Webhook -> suppress mailboxes on terminal events.
+
+    Only address-terminating events act (bounce, dropped, blocked,
+    spamreport, unsubscribe); delivered/deferred/open are counted and
+    ignored. Replays are idempotent: suppression just re-applies.
+    """
+    from inbound import process_sendgrid_events, webhook_secret_ok
+    if not webhook_secret_ok(_inbound_secret_from(request)):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    raw = await request.body()
+    if not raw:
+        return JSONResponse(status_code=400, content={"error": "empty body"})
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse(status_code=400, content={"error": "invalid json"})
+    return await process_sendgrid_events(payload)
+
+
+@app.get("/internal/inbound")
+async def internal_inbound(limit: int = 50,
+                           x_cron_token: str = Header(default=""),
+                           authorization: str = Header(default="")) -> Any:
+    """Recent inbound messages for the ops page (CRON_SECRET-gated)."""
+    if not _cron_authorized(x_cron_token, authorization):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    from db import list_inbound_messages
+    rows = await list_inbound_messages(limit=limit)
+    # ops.html accepts either spelling of the sender column; serve both.
+    inbound = []
+    for row in rows:
+        item = dict(row)
+        item.setdefault("from", item.get("from_address") or "")
+        inbound.append(item)
+    return {"inbound": inbound}
+
+
+@app.get("/internal/handoffs")
+async def internal_handoffs(status: str = "open",
+                            x_cron_token: str = Header(default=""),
+                            authorization: str = Header(default="")) -> Any:
+    """The human-action queue (open / acknowledged / resolved / all)."""
+    if not _cron_authorized(x_cron_token, authorization):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    from db import list_handoffs
+    return {"handoffs": await list_handoffs(status=status)}
+
+
+@app.post("/internal/handoffs/{handoff_id}")
+async def internal_handoff_update(handoff_id: int, request: Request,
+                                  x_cron_token: str = Header(default=""),
+                                  authorization: str = Header(default="")) -> Any:
+    """Move one handoff: {"status": "acknowledged" | "resolved" | "open"}."""
+    if not _cron_authorized(x_cron_token, authorization):
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+    from db import update_handoff_status
+    try:
+        payload = json.loads(await request.body() or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        payload = {}
+    new_status = str((payload or {}).get("status") or "").strip().lower()
+    if new_status not in ("open", "acknowledged", "resolved"):
+        return JSONResponse(status_code=400,
+                            content={"error": "invalid status",
+                                     "allowed": ["open", "acknowledged",
+                                                 "resolved"]})
+    if not await update_handoff_status(handoff_id, new_status):
+        return JSONResponse(status_code=404,
+                            content={"error": "handoff not found"})
+    return {"status": "ok", "handoff_id": handoff_id,
+            "new_status": new_status}
 
 
 @app.exception_handler(Exception)

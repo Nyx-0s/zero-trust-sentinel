@@ -51,9 +51,17 @@ async def run_win_back_cron():
     sent = 0
     for customer_id in customer_ids:
         try:
-            await send_win_back_email(customer_id)
-            await mark_stage_sent(customer_id, "win_back")
-            sent += 1
+            # Only a provider-accepted send is marked. A rejected/failed
+            # send stays unmarked so the next daily tick can retry it
+            # (still bounded by the NOT EXISTS stage filter above).
+            accepted = await send_win_back_email(customer_id)
+            if accepted:
+                await mark_stage_sent(customer_id, "win_back")
+                sent += 1
+            else:
+                logger.warning(
+                    f"[CRON] Win-back not accepted for client {customer_id}; "
+                    "stage left unmarked for a later retry")
         except Exception as e:
             logger.error(f"[CRON] Win-back failed for client {customer_id}: {e}")
         await asyncio.sleep(WIN_BACK_JITTER_SECONDS)  # Jitter between sends

@@ -2,7 +2,9 @@ import asyncio
 import json
 import os
 import random
+import uuid
 from datetime import datetime
+from typing import Any
 
 import httpx
 
@@ -19,6 +21,8 @@ from db import (
     has_stage_sent,
     has_stage_sent_for_email,
     count_sends_today,
+    mailbox_state,
+    record_outbound_message,
 )
 from utils import unsubscribe_token
 
@@ -34,6 +38,19 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")
 # Reply-To points at the operator's real mailbox; a prospect's answer reaches
 # a human instead of a black hole.
 REPLY_TO = os.getenv("REPLY_TO", "aryan.ahlawat@rftsystems.com")
+# When SendGrid Inbound Parse is wired to /webhook/sendgrid/inbound, replies
+# must be delivered to the mailbox that Parse is configured for - set
+# REPLY_TO_INBOUND to that address. It wins over REPLY_TO whenever set; both
+# are re-read at call time so a redeployed env is picked up without code
+# changes.
+REPLY_TO_INBOUND = os.getenv("REPLY_TO_INBOUND", "").strip()
+
+
+def _reply_to_address() -> str:
+    """Reply-To for outbound mail: REPLY_TO_INBOUND if configured, else REPLY_TO."""
+    inbound = (os.getenv("REPLY_TO_INBOUND") or "").strip() or REPLY_TO_INBOUND
+    return inbound or REPLY_TO
+
 # Where API links in emails point (reports, unsubscribe). Falls back to SITE_URL.
 PUBLIC_API_URL = (os.getenv("PUBLIC_API_URL") or os.getenv("SITE_URL")
                   or "https://zerodaysentinel.xo.je").rstrip("/")
@@ -77,12 +94,19 @@ class OutboundEngine:
         self.jitter_min = int(os.getenv("JITTER_MIN_SECONDS", "60"))
         self.jitter_max = int(os.getenv("JITTER_MAX_SECONDS", "120"))
 
-    async def _send_email(self, to_email: str, name: str, subject: str, body: str) -> bool:
+    async def _send_email(self, to_email: str, name: str, subject: str, body: str,
+                          lead_id: int = 0, stage: str = "",
+                          domain: str = "") -> bool:
         """Sends a permission-based email with circuit-breaker logic.
 
         Returns True ONLY when the provider accepted the message (SendGrid
         answers 202). Anything else - 4xx, 5xx, transport error - is a
         failure and the caller must not record a stage as sent.
+
+        `lead_id`/`stage`/`domain` identify the send for reply correlation:
+        they are written into the payload BEFORE the call, stored only AFTER
+        the provider accepts, and let an inbound reply find its lead by
+        Message-ID, provider id, or our X-ZS-Message-Key header.
         """
         if self.circuit_breaker_active:
             print("[CIRCUIT BREAKER] Suppressing email send.")
@@ -93,14 +117,34 @@ class OutboundEngine:
             return False
 
         html = body.replace("\n", "<br>")
+        # Correlation ids, built before the request: message_key is ours
+        # (stable across providers), message_id is the RFC-style header the
+        # receiving client quotes back in In-Reply-To/References.
+        message_key = f"zs-{int(lead_id or 0)}-{stage or 'probe'}-{uuid.uuid4().hex[:16]}"
+        from_domain = (FROM_EMAIL.split("@")[-1].strip().lower() or "localhost")
+        message_id = f"<{message_key}@{from_domain}>"
+        reply_to = _reply_to_address()
         if SENDGRID_API_KEY:
             # SendGrid v3 mail/send - answers 202 Accepted
             url = "https://api.sendgrid.com/v3/mail/send"
             headers = {"Authorization": f"Bearer {SENDGRID_API_KEY}"}
             payload = {
-                "personalizations": [{"to": [{"email": to_email}]}],
+                "personalizations": [{
+                    "to": [{"email": to_email}],
+                    # Custom headers ride along with the message; the inbound
+                    # webhook sees them even if the client rewrites Message-ID.
+                    "headers": {
+                        "X-ZS-Message-Key": message_key,
+                        "Message-ID": message_id,
+                    },
+                    "custom_args": {
+                        "zs_message_key": message_key,
+                        "zs_lead_id": str(int(lead_id or 0)),
+                        "zs_stage": stage or "",
+                    },
+                }],
                 "from": {"email": FROM_EMAIL, "name": "Zero-Trust Sentinel"},
-                "reply_to": {"email": REPLY_TO},
+                "reply_to": {"email": reply_to},
                 "subject": subject,
                 "content": [{"type": "text/html", "value": html}],
                 "tracking_settings": {
@@ -122,6 +166,11 @@ class OutboundEngine:
                 "to": [to_email],
                 "subject": subject,
                 "html": html,
+                "reply_to": reply_to,
+                "headers": {
+                    "X-ZS-Message-Key": message_key,
+                    "Message-ID": message_id,
+                },
             }
 
         async with httpx.AsyncClient() as client:
@@ -135,6 +184,11 @@ class OutboundEngine:
             if response.status_code in (200, 202):   # SendGrid answers 202
                 self.consecutive_failures = 0  # Reset counter on success
                 print(f"[EMAIL SENT] {to_email} | Subject: {subject}")
+                # Record ONLY now that the provider accepted - and never let a
+                # recording problem report an accepted send as failed.
+                await self._record_accepted_send(
+                    response, message_key, message_id, int(lead_id or 0),
+                    stage, subject, to_email, domain)
                 return True
 
             self.consecutive_failures += 1
@@ -145,15 +199,53 @@ class OutboundEngine:
             reason = (response.text or "").strip().replace("\n", " ")[:300]
             print(f"[EMAIL FAIL] {to_email}: {response.status_code} {reason}")
 
-            # Circuit Breaker: 3 consecutive failures -> pause 1 hour
-            # (stricter threshold protects a new domain's reputation)
+            # Circuit Breaker: 3 consecutive failures -> pause 1 hour.
+            # NEVER sleep out the pause inside a serverless request
+            # (maxDuration 300 would kill the function mid-breaker);
+            # flip the flag and let this invocation return - the next
+            # cron tick constructs a new engine, and process_batch's
+            # early-exit plus the stage gates keep volume zero either way.
             if self.consecutive_failures >= 3:
                 self.circuit_breaker_active = True
-                print("[ALERT] Circuit Breaker Activated. Pausing outbound for 1 hour.")
-                await asyncio.sleep(3600)
-                self.circuit_breaker_active = False
-                self.consecutive_failures = 0
+                print("[ALERT] Circuit Breaker Activated. "
+                      "This invocation stops sending (no in-request sleep).")
             return False
+
+    async def _record_accepted_send(self, response: Any, message_key: str,
+                                    message_id: str, lead_id: int, stage: str,
+                                    subject: str, to_email: str,
+                                    domain: str) -> None:
+        """Persist one accepted send for later reply correlation.
+
+        Extracts the provider's message id defensively: test fakes and some
+        proxies expose no headers at all (AttributeError), SendGrid's 202 body
+        can be empty (JSON parse error) - both must not disturb the send that
+        already succeeded. The DB write itself is best-effort: a missing table
+        or transient pool error warns instead of failing the caller, which is
+        about to mark the stage as sent.
+        """
+        provider_message_id = ""
+        try:
+            provider_message_id = str(
+                response.headers.get("x-message-id") or "").strip()
+        except Exception:
+            provider_message_id = ""
+        if not provider_message_id:
+            try:
+                data = response.json()
+                if isinstance(data, dict):
+                    provider_message_id = str(data.get("id") or "").strip()
+            except Exception:
+                provider_message_id = ""
+        try:
+            await record_outbound_message(
+                message_key=message_key, lead_id=lead_id, mailbox=to_email,
+                stage=stage, subject=subject,
+                provider_message_id=provider_message_id,
+                message_id=message_id, domain=domain, status="accepted")
+        except Exception as e:
+            print(f"[WARN] outbound correlation not recorded for {to_email}: "
+                  f"{type(e).__name__}: {str(e)[:200]}")
 
     def _reset_daily_counter(self):
         if datetime.now().date() != self.last_reset_date:
@@ -214,6 +306,13 @@ class OutboundEngine:
                 print(f"[SKIP] {lead['email']} already got '{stage}' on another "
                       f"lead for {lead['domain']}")
                 continue
+            # Authoritative contact state: a reply or an opt-out recorded by
+            # ANY path (inbound webhook, one-click unsubscribe) stops this
+            # mailbox server-side right before the send.
+            state = await mailbox_state(lead["email"])
+            if state:
+                print(f"[SKIP] {lead['email']} is '{state}' - follow-ups stopped")
+                continue
 
             domain = lead["domain"]
             email = lead["email"]
@@ -237,7 +336,9 @@ class OutboundEngine:
 
             body = self._footer(lead["id"], body)
 
-            success = await self._send_email(email, name, subject, body)
+            success = await self._send_email(email, name, subject, body,
+                                             lead_id=lead["id"], stage=stage,
+                                             domain=domain)
 
             if success:
                 self.emails_sent_today += 1

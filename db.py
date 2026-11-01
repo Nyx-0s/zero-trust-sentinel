@@ -7,6 +7,9 @@ Tables:
 - subscriptions: stores subscription status
 - coupons: stores coupon codes for win-back
 - stripe_events: tracks processed Stripe events for idempotency
+- outbound_messages: correlation rows for accepted sends (reply matching)
+- inbound_messages: one row per inbound reply/event (idempotent on external_id)
+- handoffs: human-actionable replies (open -> acknowledged -> resolved)
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
@@ -238,6 +241,80 @@ async def init_db() -> None:
             created_at TIMESTAMP DEFAULT NOW()
         )""")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_unlocks_domain ON unlocks(domain, kind, status)")
+
+        # --- The inbound loop: what we sent, what came back, who acts ------
+        # message_key is our own Message-ID (written into the payload) or the
+        # provider's id from the 202 response; storing both lets a reply be
+        # matched by header even when the client rewrites Message-ID.
+        await conn.execute("""CREATE TABLE IF NOT EXISTS outbound_messages (
+            message_key TEXT PRIMARY KEY,
+            lead_id INTEGER NOT NULL,
+            mailbox TEXT NOT NULL,
+            stage TEXT DEFAULT '',
+            subject TEXT DEFAULT '',
+            status TEXT DEFAULT 'accepted',
+            domain TEXT DEFAULT '',
+            provider_message_id TEXT DEFAULT '',
+            message_id TEXT DEFAULT '',
+            external_id TEXT,
+            sent_at TIMESTAMP DEFAULT NOW()
+        )""")
+        # Idempotent column adds for databases where the earlier (narrower)
+        # CREATE TABLE already ran - safe to re-run on every startup.
+        await conn.execute("ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT ''")
+        await conn.execute("ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS provider_message_id TEXT DEFAULT ''")
+        await conn.execute("ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS message_id TEXT DEFAULT ''")
+        await conn.execute("ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS external_id TEXT")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_outbound_lead ON outbound_messages(lead_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_outbound_mailbox ON outbound_messages(lower(mailbox))")
+        # Provider ids are unique per accepted send when present; the partial
+        # unique index only constrains non-empty values so default '' rows
+        # (Resend fallback, probes) never collide.
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_provider_message_id "
+            "ON outbound_messages(provider_message_id) "
+            "WHERE provider_message_id <> ''")
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outbound_message_id "
+            "ON outbound_messages(message_id) WHERE message_id <> ''")
+
+        # One row per inbound event. external_id is UNIQUE, so a webhook
+        # replay (or two deliveries of the same message) is stored once.
+        await conn.execute("""CREATE TABLE IF NOT EXISTS inbound_messages (
+            id SERIAL PRIMARY KEY,
+            external_id TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL,
+            from_address TEXT NOT NULL,
+            recipient TEXT DEFAULT '',
+            subject TEXT DEFAULT '',
+            body TEXT DEFAULT '',
+            lead_id INTEGER,
+            match_method TEXT DEFAULT 'unmatched',
+            classification TEXT DEFAULT 'OTHER',
+            classification_confidence REAL DEFAULT 0,
+            evidence TEXT DEFAULT '',
+            stopped_followups BOOLEAN DEFAULT FALSE,
+            suppressed BOOLEAN DEFAULT FALSE,
+            needs_human BOOLEAN DEFAULT FALSE,
+            raw_headers JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_inbound_lead ON inbound_messages(lead_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_inbound_created ON inbound_messages(created_at DESC)")
+
+        # A human-actionable reply: WHO replied, which company, what the
+        # report says, and the recommended next step. open -> acknowledged.
+        await conn.execute("""CREATE TABLE IF NOT EXISTS handoffs (
+            id SERIAL PRIMARY KEY,
+            inbound_id INTEGER,
+            lead_id INTEGER,
+            classification TEXT DEFAULT 'OTHER',
+            title TEXT NOT NULL,
+            detail TEXT DEFAULT '',
+            status TEXT DEFAULT 'open',
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_handoffs_status ON handoffs(status, created_at DESC)")
 
 
 async def create_client(domain: str, email: str = "", name: str = "") -> int:
@@ -757,14 +834,328 @@ async def mark_event_processed(event_id: str, event_type: str, client_id: int = 
 
 
 async def is_suppressed(email: str) -> bool:
-    """Checks if an email is on the suppression list."""
+    """True when this MAILBOX must never be contacted again.
+
+    Mailbox-wide and case-insensitive: suppression is a property of the
+    address, not of one lead row - discovery regularly opens a second row for
+    the same company, and an opt-out on one of them has to bind them all.
+    """
+    if not email:
+        return False
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT 1 FROM lead_tasks WHERE email = $1 AND status = 'suppressed' LIMIT 1",
+            "SELECT 1 FROM lead_tasks WHERE lower(email) = lower($1) "
+            "AND status = 'suppressed' LIMIT 1",
             email,
         )
         return row is not None
+
+
+async def mailbox_state(email: str) -> str:
+    """'suppressed', 'replied' or '' - the authoritative contact state.
+
+    Checked before every send, so a reply or an opt-out recorded by any
+    inbound path stops follow-ups for that address everywhere, server-side.
+    """
+    if not email:
+        return ""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status FROM lead_tasks WHERE lower(email) = lower($1) "
+            "AND status IN ('suppressed', 'replied') "
+            "ORDER BY CASE WHEN status = 'suppressed' THEN 0 ELSE 1 END "
+            "LIMIT 1",
+            email,
+        )
+        return row["status"] if row else ""
+
+
+async def leads_for_mailbox(email: str) -> List[Dict[str, Any]]:
+    """Every lead row that shares this address (for matching and for bulk state changes)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM lead_tasks WHERE lower(email) = lower($1) ORDER BY id",
+            email,
+        )
+        return [dict(r) for r in rows]
+
+
+async def suppress_mailbox(email: str, reason: str = "unsubscribed") -> int:
+    """Mark EVERY lead for this address do-not-contact. Returns rows changed."""
+    if not email:
+        return 0
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return int(await conn.execute(
+            "UPDATE lead_tasks SET status = 'suppressed', "
+            "metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{reason}', "
+            "to_jsonb($2::text)) "
+            "WHERE lower(email) = lower($1)",
+            email, reason,
+        ).split()[-1])
+
+
+async def mark_mailbox_replied(email: str, classification: str = "OTHER") -> int:
+    """Mark every lead for this address as replied - this is what stops the
+    automated follow-up sequence (get_inbound_leads only serves hot/completed).
+    Returns rows changed.
+    """
+    if not email:
+        return 0
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return int(await conn.execute(
+            "UPDATE lead_tasks SET status = 'replied', "
+            "metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{reply}', "
+            "to_jsonb($2::text)) "
+            "WHERE lower(email) = lower($1) AND status IN ('completed', 'hot', "
+            "'pending', 'running')",
+            email, classification,
+        ).split()[-1])
+
+
+# ---------------------------------------------------------------------------
+# Outbound correlation: what we sent, keyed so a reply can find its lead.
+# ---------------------------------------------------------------------------
+
+async def record_outbound_message(message_key: str, lead_id: int, mailbox: str,
+                                  stage: str = "", subject: str = "",
+                                  provider_message_id: str = "",
+                                  message_id: str = "", domain: str = "",
+                                  status: str = "accepted") -> None:
+    """Upsert-safe record of one accepted outbound message.
+
+    Called ONLY after the provider accepted (SendGrid 202) - never before,
+    so the table never claims a send the provider refused. ON CONFLICT
+    (message_key) makes a retried record call a harmless update.
+    """
+    if not message_key:
+        return
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO outbound_messages "
+            "(message_key, lead_id, mailbox, stage, subject, "
+            " provider_message_id, message_id, domain, status) "
+            "VALUES ($1, $2, lower($3), $4, $5, $6, $7, $8, $9) "
+            "ON CONFLICT (message_key) DO UPDATE SET "
+            "  provider_message_id = EXCLUDED.provider_message_id, "
+            "  message_id = EXCLUDED.message_id, "
+            "  domain = EXCLUDED.domain, "
+            "  status = EXCLUDED.status",
+            message_key, int(lead_id), mailbox or "", stage or "", subject or "",
+            provider_message_id or "", message_id or "", domain or "",
+            status or "accepted",
+        )
+
+
+async def get_outbound_by_message_key(message_key: str) -> Optional[Dict[str, Any]]:
+    """One accepted send, looked up by our own message_key."""
+    if not message_key:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM outbound_messages WHERE message_key = $1", message_key)
+        return dict(row) if row else None
+
+
+async def get_outbound_by_provider_id(provider_message_id: str) -> Optional[Dict[str, Any]]:
+    """One accepted send, looked up by the provider's X-Message-Id."""
+    if not provider_message_id:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM outbound_messages WHERE provider_message_id = $1 "
+            "ORDER BY sent_at DESC LIMIT 1", provider_message_id)
+        return dict(row) if row else None
+
+
+async def get_outbound_by_message_id(message_id: str) -> Optional[Dict[str, Any]]:
+    """One accepted send, looked up by our RFC-style Message-ID header.
+
+    This is the In-Reply-To / References target: most mail clients quote the
+    original Message-ID verbatim even when they rewrite everything else.
+    """
+    if not message_id:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM outbound_messages WHERE message_id = $1 "
+            "ORDER BY sent_at DESC LIMIT 1", message_id)
+        return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Inbound messages: idempotent storage of every reply / provider event.
+# ---------------------------------------------------------------------------
+
+async def insert_inbound_message(external_id: str, source: str, from_address: str,
+                                 recipient: str = "", subject: str = "",
+                                 body: str = "", lead_id: Optional[int] = None,
+                                 match_method: str = "unmatched",
+                                 classification: str = "OTHER",
+                                 classification_confidence: float = 0.0,
+                                 evidence: str = "",
+                                 stopped_followups: bool = False,
+                                 suppressed: bool = False,
+                                 needs_human: bool = False,
+                                 raw_headers: Optional[Dict[str, Any]] = None) -> int:
+    """Store one inbound message WITH its decision flags. Idempotent on
+    external_id.
+
+    Returns the row id - on a duplicate (external_id already stored) the
+    EXISTING id is returned, so a webhook replay never creates a second row.
+    The caller decides new-vs-replay by checking get_inbound_by_external_id
+    BEFORE this call, which lets it re-run no side effects on a replay.
+    """
+    if not external_id:
+        external_id = f"noext-{uuid.uuid4().hex}"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO inbound_messages "
+            "(external_id, source, from_address, recipient, subject, body, "
+            " lead_id, match_method, classification, classification_confidence, "
+            " evidence, stopped_followups, suppressed, needs_human, raw_headers) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, "
+            "CAST($15 AS jsonb)) "
+            "ON CONFLICT (external_id) DO NOTHING RETURNING id",
+            external_id, source, from_address, recipient or "", subject or "",
+            body or "", lead_id, match_method or "unmatched",
+            classification or "OTHER", float(classification_confidence or 0.0),
+            evidence or "", bool(stopped_followups), bool(suppressed),
+            bool(needs_human), json.dumps(raw_headers or {}),
+        )
+        if row:
+            return int(row["id"])
+        # Duplicate: return the existing row's id.
+        existing = await conn.fetchrow(
+            "SELECT id FROM inbound_messages WHERE external_id = $1", external_id)
+        return int(existing["id"]) if existing else 0
+
+
+async def get_inbound_by_external_id(external_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a stored inbound row by its provider/derived external id."""
+    if not external_id:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM inbound_messages WHERE external_id = $1", external_id)
+        return dict(row) if row else None
+
+
+async def list_inbound_messages(limit: int = 50,
+                                lead_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Most recent inbound messages (optionally for one lead), newest first."""
+    limit = max(1, min(int(limit or 50), 200))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if lead_id is not None:
+            rows = await conn.fetch(
+                "SELECT * FROM inbound_messages WHERE lead_id = $1 "
+                "ORDER BY created_at DESC LIMIT $2", int(lead_id), limit)
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM inbound_messages ORDER BY created_at DESC LIMIT $1",
+                limit)
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Handoffs: a human must act on this reply (interested / question).
+# ---------------------------------------------------------------------------
+
+async def create_handoff(inbound_id: Optional[int], lead_id: Optional[int],
+                         classification: str, title: str,
+                         detail: str = "") -> int:
+    """Open a human-actionable handoff for one inbound reply."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO handoffs (inbound_id, lead_id, classification, title, detail) "
+            "VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            inbound_id, lead_id, classification or "OTHER", title or "(untitled)",
+            detail or "",
+        )
+        return int(row["id"]) if row else 0
+
+
+async def list_handoffs(status: str = "open") -> List[Dict[str, Any]]:
+    """Handoffs for one status bucket (default: open), newest first."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if status and status != "all":
+            rows = await conn.fetch(
+                "SELECT * FROM handoffs WHERE status = $1 "
+                "ORDER BY created_at DESC LIMIT 200", status)
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM handoffs ORDER BY created_at DESC LIMIT 200")
+        return [dict(r) for r in rows]
+
+
+async def update_handoff_status(handoff_id: int, status: str) -> bool:
+    """Move a handoff between open / acknowledged / resolved. True when found."""
+    if status not in ("open", "acknowledged", "resolved"):
+        return False
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE handoffs SET status = $2 WHERE id = $1 RETURNING id",
+            int(handoff_id), status)
+        return row is not None
+
+
+# ---------------------------------------------------------------------------
+# Reply -> lead matching helpers.
+# ---------------------------------------------------------------------------
+
+async def get_lead_by_email_strongest(email: str) -> Optional[Dict[str, Any]]:
+    """Best lead row for a mailbox: hot > completed > anything else; newest wins.
+
+    A company's published address may appear on several lead rows (discovery
+    re-opens it); the reply should attach to the one a human would act on.
+    """
+    if not email:
+        return None
+    leads = await leads_for_mailbox(email)
+    if not leads:
+        return None
+    rank = {"hot": 0, "completed": 1, "pending": 2, "running": 3}
+    leads.sort(key=lambda r: (rank.get(r.get("status") or "", 4), -(r.get("id") or 0)))
+    return leads[0]
+
+
+async def get_lead_by_domain(domain: str) -> Optional[Dict[str, Any]]:
+    """Best lead row for a domain (any mailbox) - domain-lead fallback match."""
+    if not domain:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM lead_tasks WHERE lower(domain) = lower($1) "
+            "ORDER BY CASE status WHEN 'hot' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END, "
+            "  id DESC LIMIT 1", domain)
+        return dict(row) if row else None
+
+
+async def get_outbound_recipient_mailbox(mailbox: str) -> Optional[Dict[str, Any]]:
+    """Most recent accepted send TO this mailbox (envelope recipient fallback)."""
+    if not mailbox:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM outbound_messages WHERE lower(mailbox) = lower($1) "
+            "ORDER BY sent_at DESC LIMIT 1", mailbox)
+        return dict(row) if row else None
 
 
 async def create_referral(referrer_id: int, referred_domain: str) -> int:
@@ -871,13 +1262,30 @@ async def suppress_lead(lead_id: int, reason: str = "unsubscribed") -> None:
 
 
 async def get_inbound_leads(limit: int = 20) -> List[Dict[str, Any]]:
-    """Gets leads that have opted-in (scan completed) and are not suppressed."""
+    """Gets leads that have opted-in (scan completed) and are not suppressed.
+
+    Also excludes any mailbox that has already produced a genuine (matched)
+    reply on ANY lead row, or whose mailbox is suppressed/replied on any row:
+    once a human answers - or opts out - the automated sequence must stop for
+    that address regardless of which row the reply matched. Unmatched noise
+    (wrong-recipient mail, spoofs) does NOT stop the sequence, so those rows
+    are excluded from the exclusion via match_method='unmatched'.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM lead_tasks WHERE status IN ('completed', 'hot') "
-            "AND email IS NOT NULL AND email <> '' "
-            "ORDER BY updated_at ASC LIMIT $1", limit,
+            "SELECT t.* FROM lead_tasks t "
+            "WHERE t.status IN ('completed', 'hot') "
+            "AND t.email IS NOT NULL AND t.email <> '' "
+            # No genuine (matched) reply from this mailbox on any lead row.
+            "AND NOT EXISTS (SELECT 1 FROM inbound_messages m "
+            "       WHERE lower(m.from_address) = lower(t.email) "
+            "         AND m.match_method <> 'unmatched') "
+            # No lead row for this mailbox is suppressed/replied.
+            "AND NOT EXISTS (SELECT 1 FROM lead_tasks t2 "
+            "       WHERE lower(t2.email) = lower(t.email) "
+            "         AND t2.status IN ('suppressed', 'replied')) "
+            "ORDER BY t.updated_at ASC LIMIT $1", limit,
         )
         return [{"id": row["id"], "domain": row["domain"], "email": row["email"],
                  "name": row["name"], "updated_at": row["updated_at"]} for row in rows]

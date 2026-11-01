@@ -31,9 +31,10 @@
     <div class="container prose">
         <span class="eyebrow">Internal</span>
         <h1>Operations</h1>
-        <p class="lead">Every number on this page is aggregated from the live database when you load it. Nothing here is cached, stored, or estimated. Counts only &mdash; no addresses, no report contents.</p>
+        <p class="lead">Every number on this page is aggregated from the live database when you load it. Nothing here is cached, stored, or estimated. Counts only for the metrics below &mdash; no addresses, no report contents. The Handoffs and Inbound sections at the bottom require the ops cron token and show truncated previews only.</p>
         <p id="ops-error" class="small" style="color:#c0392b;display:none;"></p>
         <p id="ops-updated" class="small muted"></p>
+        <p id="ops-token-hint" class="small muted">Handoffs and Inbound need the ops cron token &mdash; paste it in the Handoffs section below.</p>
     </div>
 </section>
 
@@ -85,6 +86,77 @@
         <div class="card" style="margin-top:1rem;">
             <h3>Not tracked yet</h3>
             <div id="m-untracked" class="small muted">Loading&hellip;</div>
+        </div>
+    </div>
+</section>
+
+<section class="section section-alt" id="ops-handoffs-section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Triage</span>
+            <h2>Handoffs</h2>
+            <p class="small muted">Items the pipeline could not close on its own. Acknowledge when you pick one up, resolve when it is done.</p>
+        </div>
+
+        <div class="card" style="margin-bottom:1.25rem;">
+            <h3>Ops token</h3>
+            <p class="small muted">Paste the <code>CRON_SECRET</code> once per browser tab. It is stored in <code>sessionStorage</code> (this tab only), sent as the <code>X-Cron-Token</code> header, and never placed in the URL or logged.</p>
+            <div class="ops-token-row">
+                <input type="password" id="ops-token" class="ops-token-input" placeholder="X-Cron-Token" autocomplete="off" spellcheck="false" aria-label="Ops cron token">
+                <button type="button" class="btn btn-primary ops-btn" id="ops-token-save">Save &amp; load</button>
+                <button type="button" class="btn btn-ghost ops-btn" id="ops-token-clear">Clear</button>
+            </div>
+            <p id="ops-token-status" class="small muted" role="status" aria-live="polite" style="margin:.75rem 0 0;"></p>
+        </div>
+
+        <div class="ops-toolbar">
+            <label class="small muted" for="ops-handoff-status">Status</label>
+            <select id="ops-handoff-status" class="ops-select">
+                <option value="open" selected>Open</option>
+                <option value="acknowledged">Acknowledged</option>
+                <option value="resolved">Resolved</option>
+            </select>
+            <button type="button" class="btn btn-secondary ops-btn" id="ops-refresh">Refresh</button>
+            <span id="ops-handoff-count" class="small muted"></span>
+        </div>
+        <p id="ops-handoffs-error" class="small ops-error" role="status" aria-live="polite" style="display:none;"></p>
+
+        <div id="ops-handoffs" class="grid grid-2">
+            <p class="small muted ops-empty">Loading&hellip;</p>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="ops-inbound-section">
+    <div class="container">
+        <div class="section-head">
+            <span class="eyebrow">Mail</span>
+            <h2>Inbound</h2>
+            <p class="small muted">The 50 most recent inbound messages. Body previews are truncated to 200 characters &mdash; hover a preview to read more.</p>
+        </div>
+
+        <div class="ops-toolbar">
+            <button type="button" class="btn btn-secondary ops-btn" id="ops-refresh-inbound">Refresh</button>
+            <span id="ops-inbound-count" class="small muted"></span>
+        </div>
+        <p id="ops-inbound-error" class="small ops-error" role="status" aria-live="polite" style="display:none;"></p>
+
+        <div class="table-wrap">
+            <table class="corporate" aria-label="Inbound messages">
+                <thead>
+                    <tr>
+                        <th scope="col">From</th>
+                        <th scope="col">Subject</th>
+                        <th scope="col">Classification</th>
+                        <th scope="col">Match</th>
+                        <th scope="col">Received</th>
+                        <th scope="col">Body</th>
+                    </tr>
+                </thead>
+                <tbody id="ops-inbound-body">
+                    <tr><td colspan="6" class="small muted">Loading&hellip;</td></tr>
+                </tbody>
+            </table>
         </div>
     </div>
 </section>
@@ -158,6 +230,443 @@
             err.style.display = 'block';
             err.innerText = 'Could not load metrics from ' + API_BASE + ': ' + e.message;
         });
+</script>
+<script>
+    // Handoffs + inbound (authenticated with the ops cron token).
+    // Shares API_BASE with the metrics script above. Token lives in
+    // sessionStorage only, travels in the X-Cron-Token header, and is
+    // never written to the URL or the console.
+    (function () {
+        'use strict';
+
+        var TOKEN_KEY = 'zs_ops_token';
+        var POLL_MS = 60000;
+        var BODY_MAX = 200;
+        var INBOUND_LIMIT = 50;
+        var HANDOFF_KEYS = ['items', 'handoffs', 'rows', 'results', 'data'];
+        var INBOUND_KEYS = ['items', 'inbound', 'rows', 'results', 'data'];
+
+        var inFlight = false;
+        var pollTimer = null;
+        var memToken = '';
+
+        function el(id) { return document.getElementById(id); }
+
+        function esc(s) {
+            return String(s === null || s === undefined ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function trunc(s, n) {
+            s = String(s === null || s === undefined ? '' : s);
+            return s.length > n ? s.slice(0, n) + '\u2026' : s;
+        }
+
+        function when(v) {
+            if (!v) return '';
+            var d = new Date(v);
+            return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+        }
+
+        function rowsOf(payload, keys) {
+            if (Array.isArray(payload)) return payload;
+            if (payload && typeof payload === 'object') {
+                for (var i = 0; i < keys.length; i++) {
+                    if (Array.isArray(payload[keys[i]])) return payload[keys[i]];
+                }
+            }
+            return [];
+        }
+
+        /* --- Token storage (tab-scoped; never in the URL) ----------------- */
+        function getToken() {
+            try {
+                var v = sessionStorage.getItem(TOKEN_KEY);
+                return v || memToken;
+            } catch (e) {
+                return memToken;
+            }
+        }
+
+        function setToken(v) {
+            memToken = v || '';
+            try {
+                if (v) sessionStorage.setItem(TOKEN_KEY, v);
+                else sessionStorage.removeItem(TOKEN_KEY);
+            } catch (e) { /* private mode: keep it in memory for this tab */ }
+        }
+
+        function authedFetch(path, opts) {
+            var token = getToken();
+            if (!token) {
+                return Promise.reject(new Error('NO_TOKEN'));
+            }
+            opts = opts || {};
+            var headers = {};
+            if (opts.headers) {
+                for (var k in opts.headers) {
+                    if (Object.prototype.hasOwnProperty.call(opts.headers, k)) headers[k] = opts.headers[k];
+                }
+            }
+            headers['X-Cron-Token'] = token;
+            opts.headers = headers;
+            return fetch(API_BASE + path, opts);
+        }
+
+        function httpError(r) {
+            var e = new Error('HTTP ' + r.status);
+            e.status = r.status;
+            return e;
+        }
+
+        function isAuthErr(e) {
+            return !!e && (e.message === 'NO_TOKEN' || e.status === 401 || e.status === 403);
+        }
+
+        function errText(e) {
+            if (!e) return 'Unknown error.';
+            if (e.message === 'NO_TOKEN') return 'No ops token yet \u2014 paste the CRON_SECRET above.';
+            if (typeof e.status === 'number') {
+                if (e.status === 401 || e.status === 403) {
+                    return 'Token invalid or missing (' + e.status + '). Paste the CRON_SECRET above.';
+                }
+                return 'Request failed (HTTP ' + e.status + ').';
+            }
+            return 'Request failed: ' + e.message;
+        }
+
+        function showErr(id, msg) {
+            var n = el(id);
+            if (!n) return;
+            n.textContent = msg || '';
+            n.style.display = msg ? 'block' : 'none';
+        }
+
+        function tokenStatus(msg, isErr) {
+            var n = el('ops-token-status');
+            if (!n) return;
+            n.textContent = msg || '';
+            n.className = 'small ' + (isErr ? 'ops-error' : 'muted');
+        }
+
+        function setHint(msg) {
+            var n = el('ops-token-hint');
+            if (n) n.textContent = msg;
+        }
+
+        /* --- Badges -------------------------------------------------------- */
+        function classVariant(c) {
+            c = String(c || '').toLowerCase();
+            if (/spam|phish|scam|malicious|abuse|threat/.test(c)) return 'danger';
+            if (/review|pending|suspicious|alert|human/.test(c)) return 'warn';
+            if (/safe|clean|legit|deliver|ok/.test(c)) return 'ok';
+            if (/unknown|other|none|misc|n\/a/.test(c)) return 'neutral';
+            return '';
+        }
+
+        function classPill(c) {
+            var text = String(c || 'unknown');
+            var v = classVariant(text);
+            return '<span class="pill' + (v ? ' ' + v : '') + '">' + esc(text) + '</span>';
+        }
+
+        function statusPill(s) {
+            var v = s === 'resolved' ? 'ok' : (s === 'acknowledged' ? '' : 'warn');
+            return '<span class="pill' + (v ? ' ' + v : '') + '">' + esc(s) + '</span>';
+        }
+
+        function extractDomain(text) {
+            text = String(text || '');
+            var email = text.match(/[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/);
+            if (email) return email[1].toLowerCase();
+            var bare = text.match(/\b((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b/);
+            return bare ? bare[1].toLowerCase() : '';
+        }
+
+        /* --- Render: handoffs ---------------------------------------------- */
+        function renderHandoffs(list) {
+            var box = el('ops-handoffs');
+            var count = el('ops-handoff-count');
+            count.textContent = list.length + (list.length === 1 ? ' item' : ' items');
+            if (!list.length) {
+                box.innerHTML = '<p class="small muted ops-empty">Nothing in this queue right now.</p>';
+                return;
+            }
+            box.innerHTML = list.map(function (h) {
+                var status = String(h.status || 'open');
+                var detail = String(h.detail || '');
+                var domain = extractDomain(detail);
+                var meta = [when(h.created_at)];
+                if (h.lead_id) meta.push('lead ' + h.lead_id);
+                if (h.inbound_id) meta.push('inbound ' + h.inbound_id);
+                var ackDisabled = status === 'acknowledged' ? ' disabled' : '';
+                var resDisabled = status === 'resolved' ? ' disabled' : '';
+                return '<article class="card ops-handoff-card">'
+                    + '<div class="ops-card-top">'
+                    + statusPill(status)
+                    + classPill(h.classification)
+                    + (domain ? '<span class="pill neutral">' + esc(domain) + '</span>' : '')
+                    + '<span class="ops-meta">' + esc(meta.filter(Boolean).join(' \u00b7 ')) + '</span>'
+                    + '</div>'
+                    + '<h3>' + esc(h.title || '(untitled handoff)') + '</h3>'
+                    + (detail ? '<p class="small ops-detail" title="' + esc(detail) + '">' + esc(trunc(detail, 160)) + '</p>' : '')
+                    + '<div class="ops-actions">'
+                    + '<button type="button" class="btn btn-primary ops-btn" data-hid="' + esc(h.id) + '" data-set="acknowledged"' + ackDisabled + '>Acknowledge</button>'
+                    + '<button type="button" class="btn btn-secondary ops-btn" data-hid="' + esc(h.id) + '" data-set="resolved"' + resDisabled + '>Resolved</button>'
+                    + '</div>'
+                    + '</article>';
+            }).join('');
+        }
+
+        /* --- Render: inbound ------------------------------------------------ */
+        function renderInbound(list) {
+            var body = el('ops-inbound-body');
+            var count = el('ops-inbound-count');
+            count.textContent = list.length + (list.length === 1 ? ' message' : ' messages');
+            if (!list.length) {
+                body.innerHTML = '<tr><td colspan="6" class="small muted">No inbound messages yet.</td></tr>';
+                return;
+            }
+            body.innerHTML = list.map(function (m) {
+                var b = String(m.body || '');
+                var flags = '';
+                if (m.needs_human) flags += '<span class="pill warn">needs human</span>';
+                if (m.suppressed) flags += '<span class="pill neutral">suppressed</span>';
+                if (m.stopped_followups) flags += '<span class="pill neutral">follow-ups stopped</span>';
+                var sub = [];
+                if (m.id) sub.push('#' + m.id);
+                if (m.lead_id) sub.push('lead ' + m.lead_id);
+                return '<tr>'
+                    + '<td><strong>' + esc(m.from_address || m.from || 'unknown') + '</strong>'
+                    + (m.recipient ? '<div class="ops-sub">to ' + esc(m.recipient) + '</div>' : '')
+                    + '</td>'
+                    + '<td class="ops-subject"><strong>' + esc(m.subject || '(no subject)') + '</strong>'
+                    + (sub.length ? '<div class="ops-sub">' + esc(sub.join(' \u00b7 ')) + '</div>' : '')
+                    + (flags ? '<div class="ops-flags">' + flags + '</div>' : '')
+                    + '</td>'
+                    + '<td>' + classPill(m.classification) + '</td>'
+                    + '<td><span class="pill neutral">' + esc(m.match_method || 'none') + '</span></td>'
+                    + '<td class="small muted">' + esc(when(m.created_at)) + '</td>'
+                    + '<td class="ops-body-cell"><span title="' + esc(b) + '">' + esc(trunc(b, BODY_MAX)) + '</span></td>'
+                    + '</tr>';
+            }).join('');
+        }
+
+        /* --- Loaders (resolve to null on success, the error otherwise) ----- */
+        function loadHandoffs() {
+            var status = el('ops-handoff-status').value || 'open';
+            var box = el('ops-handoffs');
+            if (!getToken()) {
+                box.innerHTML = '<p class="small muted ops-empty">Paste the ops token above to load this queue.</p>';
+                el('ops-handoff-count').textContent = '';
+                showErr('ops-handoffs-error', '');
+                return Promise.resolve(null);
+            }
+            box.innerHTML = '<p class="small muted ops-empty">Loading&hellip;</p>';
+            return authedFetch('/internal/handoffs?status=' + encodeURIComponent(status))
+                .then(function (r) {
+                    if (!r.ok) throw httpError(r);
+                    return r.json();
+                })
+                .then(function (d) {
+                    renderHandoffs(rowsOf(d, HANDOFF_KEYS));
+                    showErr('ops-handoffs-error', '');
+                    return null;
+                })
+                .catch(function (e) {
+                    showErr('ops-handoffs-error', errText(e));
+                    box.innerHTML = '<p class="small muted ops-empty">Could not load handoffs.</p>';
+                    return e;
+                });
+        }
+
+        function loadInbound() {
+            var tbody = el('ops-inbound-body');
+            if (!getToken()) {
+                tbody.innerHTML = '<tr><td colspan="6" class="small muted">Paste the ops token above to load inbound mail.</td></tr>';
+                el('ops-inbound-count').textContent = '';
+                showErr('ops-inbound-error', '');
+                return Promise.resolve(null);
+            }
+            tbody.innerHTML = '<tr><td colspan="6" class="small muted">Loading&hellip;</td></tr>';
+            return authedFetch('/internal/inbound?limit=' + INBOUND_LIMIT)
+                .then(function (r) {
+                    if (!r.ok) throw httpError(r);
+                    return r.json();
+                })
+                .then(function (d) {
+                    renderInbound(rowsOf(d, INBOUND_KEYS));
+                    showErr('ops-inbound-error', '');
+                    return null;
+                })
+                .catch(function (e) {
+                    showErr('ops-inbound-error', errText(e));
+                    tbody.innerHTML = '<tr><td colspan="6" class="small muted">Could not load inbound messages.</td></tr>';
+                    return e;
+                });
+        }
+
+        function renderTokenGated() {
+            el('ops-handoffs').innerHTML = '<p class="small muted ops-empty">Paste the ops token above to load this queue.</p>';
+            el('ops-handoff-count').textContent = '';
+            el('ops-inbound-body').innerHTML = '<tr><td colspan="6" class="small muted">Paste the ops token above to load inbound mail.</td></tr>';
+            el('ops-inbound-count').textContent = '';
+            showErr('ops-handoffs-error', '');
+            showErr('ops-inbound-error', '');
+        }
+
+        /* --- Polling -------------------------------------------------------- */
+        function startPoll() {
+            if (pollTimer) return;
+            pollTimer = setInterval(function () {
+                if (document.hidden || inFlight || !getToken()) return;
+                refreshAll();
+            }, POLL_MS);
+        }
+
+        function stopPoll() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        }
+
+        function refreshAll() {
+            if (inFlight) return Promise.resolve();
+            if (!getToken()) {
+                stopPoll();
+                tokenStatus('No token in this tab yet \u2014 paste the CRON_SECRET to load Handoffs and Inbound.', false);
+                setHint('Handoffs and Inbound need the ops cron token \u2014 paste it in the Handoffs section below.');
+                renderTokenGated();
+                return Promise.resolve();
+            }
+            inFlight = true;
+            startPoll();
+            return Promise.all([loadHandoffs(), loadInbound()]).then(function (results) {
+                inFlight = false;
+                var err = results[0] || results[1];
+                if (err) {
+                    tokenStatus(errText(err), true);
+                    setHint('Handoffs and Inbound need the ops cron token \u2014 paste it in the Handoffs section below.');
+                    if (isAuthErr(err)) stopPoll();
+                } else {
+                    tokenStatus('Token accepted \u2014 auto-refreshing every 60 seconds.', false);
+                    setHint('Ops token active for this tab \u2014 Handoffs and Inbound refresh every 60 seconds.');
+                }
+            });
+        }
+
+        function promptForToken() {
+            var v = window.prompt('Ops cron token (X-Cron-Token):');
+            if (v === null) return;
+            v = String(v).replace(/^\s+|\s+$/g, '');
+            if (!v) {
+                tokenStatus('Empty token \u2014 nothing saved.', true);
+                return;
+            }
+            setToken(v);
+            el('ops-token').value = v;
+            refreshAll();
+        }
+
+        function setHandoffStatus(id, status, btn) {
+            var label = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '\u2026';
+            authedFetch('/internal/handoffs/' + encodeURIComponent(id), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: status })
+            })
+                .then(function (r) {
+                    if (!r.ok) throw httpError(r);
+                    return loadHandoffs();
+                })
+                .then(function (err) {
+                    if (err) {
+                        tokenStatus(errText(err), true);
+                        if (isAuthErr(err)) stopPoll();
+                    } else {
+                        tokenStatus('Handoff set to ' + status + '.', false);
+                    }
+                })
+                .catch(function (e) {
+                    tokenStatus(errText(e), true);
+                    if (isAuthErr(e)) stopPoll();
+                    btn.disabled = false;
+                    btn.textContent = label;
+                });
+        }
+
+        /* --- Wiring --------------------------------------------------------- */
+        function initOps() {
+            var stored = getToken();
+            if (stored) el('ops-token').value = stored;
+
+            el('ops-token-save').addEventListener('click', function () {
+                var v = el('ops-token').value.replace(/^\s+|\s+$/g, '');
+                if (!v) {
+                    tokenStatus('Enter the cron token first.', true);
+                    return;
+                }
+                setToken(v);
+                refreshAll();
+            });
+
+            el('ops-token').addEventListener('keydown', function (ev) {
+                if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    el('ops-token-save').click();
+                }
+            });
+
+            el('ops-token-clear').addEventListener('click', function () {
+                setToken('');
+                el('ops-token').value = '';
+                stopPoll();
+                renderTokenGated();
+                tokenStatus('Token cleared from this tab.', false);
+                setHint('Handoffs and Inbound need the ops cron token \u2014 paste it in the Handoffs section below.');
+            });
+
+            el('ops-refresh').addEventListener('click', function () {
+                if (!getToken()) { promptForToken(); return; }
+                refreshAll();
+            });
+
+            el('ops-refresh-inbound').addEventListener('click', function () {
+                if (!getToken()) { promptForToken(); return; }
+                refreshAll();
+            });
+
+            el('ops-handoff-status').addEventListener('change', function () {
+                if (inFlight) return;
+                inFlight = true;
+                loadHandoffs().then(function (err) {
+                    inFlight = false;
+                    if (err) {
+                        tokenStatus(errText(err), true);
+                        if (isAuthErr(err)) stopPoll();
+                    }
+                });
+            });
+
+            el('ops-handoffs').addEventListener('click', function (ev) {
+                if (!ev.target || !ev.target.closest) return;
+                var btn = ev.target.closest('button[data-set]');
+                if (!btn || btn.disabled) return;
+                var id = btn.getAttribute('data-hid');
+                var next = btn.getAttribute('data-set');
+                if (!id || !next) return;
+                setHandoffStatus(id, next, btn);
+            });
+
+            refreshAll();
+        }
+
+        initOps();
+    })();
 </script>
 </body>
 </html>

@@ -354,3 +354,36 @@ table.corporate td strong { color: var(--ink); }
     .footer-grid { grid-template-columns: 1fr; }
     .btn-row .btn { width: 100%; }
 }
+
+/* ==========================================================================
+   Ops (internal) - token bar, handoff queue, inbound table
+   ========================================================================== */
+.ops-token-row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+.ops-token-input {
+    flex: 1 1 260px; min-width: 200px;
+    padding: .7rem .9rem; border-radius: 10px;
+    border: 1px solid var(--line-strong); background: var(--surface);
+    color: var(--ink); font-size: .92rem; font-family: inherit;
+}
+.ops-token-input:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: transparent; }
+
+.ops-toolbar { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.ops-select {
+    padding: .55rem .8rem; border-radius: 8px; border: 1px solid var(--line-strong);
+    background: var(--surface); color: var(--ink); font-family: inherit; font-size: .9rem;
+}
+.ops-select:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+.ops-btn { padding: .5rem 1rem; font-size: .86rem; border-radius: 8px; }
+
+.ops-handoff-card { display: flex; flex-direction: column; height: 100%; }
+.ops-card-top { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: .6rem; }
+.ops-meta { font-size: .78rem; color: var(--muted); margin-left: auto; white-space: nowrap; }
+.ops-detail { color: var(--ink-2); margin: 0 0 .4rem; word-break: break-word; }
+.ops-actions { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: auto; padding-top: .9rem; }
+.ops-empty { grid-column: 1 / -1; margin: 0; }
+.ops-error { color: var(--danger); }
+
+.ops-subject strong { display: block; color: var(--ink); }
+.ops-sub { color: var(--muted); font-size: .8rem; }
+.ops-flags { display: inline-flex; gap: .4rem; flex-wrap: wrap; margin-top: .45rem; }
+.ops-body-cell { max-width: 340px; color: var(--muted); font-size: .85rem; word-break: break-word; }
