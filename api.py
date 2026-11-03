@@ -1273,7 +1273,7 @@ Zero-Trust Sentinel
     # choice as outbound_engine._send_email.
     SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
     RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-    FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")
+    FROM_EMAIL = os.getenv("FROM_EMAIL", "founder@mellenth.tech")
 
     if not SENDGRID_API_KEY and not RESEND_API_KEY:
         print("[WARN] SENDGRID_API_KEY/RESEND_API_KEY not set, win-back email skipped")
@@ -1284,7 +1284,7 @@ Zero-Trust Sentinel
 
     html = body.replace("\n", "<br>")
     # Same Reply-To the engine uses: replies must reach the monitored inbox.
-    reply_to = os.getenv("REPLY_TO", "aryan.ahlawat@rftsystems.com")
+    reply_to = os.getenv("REPLY_TO", "founder@mellenth.tech")
     if SENDGRID_API_KEY:
         # SendGrid v3 mail/send - answers 202 Accepted
         url = "https://api.sendgrid.com/v3/mail/send"
@@ -1775,7 +1775,7 @@ async def ops_summary() -> Any:
     out["health"] = {
         "llm_configured": bool(LLM_CONFIGURED),
         "email_sender": sender,
-        "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je"),
+        "email_from": os.getenv("FROM_EMAIL", "founder@mellenth.tech"),
         "inline_scan": INLINE_SCAN,
         "holds": holds,
         # Additive, gated on the schema having been created successfully.
@@ -1913,7 +1913,7 @@ async def health_check() -> Dict[str, Any]:
     return {"status": "healthy", "service": "zero-trust-sentinel",
             "llm_configured": bool(LLM_CONFIGURED),
             "email_sender": sender,
-            "email_from": os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je"),
+            "email_from": os.getenv("FROM_EMAIL", "founder@mellenth.tech"),
             # Additive: present only once the schema (inbound_messages,
             # handoffs) is known to exist - older callers ignore extra keys.
             "inbound_webhook": bool(_DB_READY),

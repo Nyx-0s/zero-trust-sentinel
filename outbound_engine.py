@@ -33,11 +33,10 @@ MAX_EMAILS_PER_DAY = int(os.getenv("MAX_EMAILS_PER_DAY", "20"))
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 # Set FROM_EMAIL to a sender on the verified domain.
-FROM_EMAIL = os.getenv("FROM_EMAIL", "security@zerodaysentinel.xo.je")
-# Replies must land in a monitored inbox. zerodaysentinel.xo.je has no MX, so
-# Reply-To points at the operator's real mailbox; a prospect's answer reaches
-# a human instead of a black hole.
-REPLY_TO = os.getenv("REPLY_TO", "aryan.ahlawat@rftsystems.com")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "founder@mellenth.tech")
+# Replies must land in a monitored Mellenth mailbox so every prospect response
+# reaches the inbound correlation and human handoff pipeline.
+REPLY_TO = os.getenv("REPLY_TO", "founder@mellenth.tech")
 # When SendGrid Inbound Parse is wired to /webhook/sendgrid/inbound, replies
 # must be delivered to the mailbox that Parse is configured for - set
 # REPLY_TO_INBOUND to that address. It wins over REPLY_TO whenever set; both
@@ -466,7 +465,7 @@ Zero-Trust Sentinel"""
         Honest verdict - HOLD here means every follow-up this process attempts
         will bounce, so the Autopilot is not live yet. Returns True on GO.
         """
-        probe_to = "security@zerodaysentinel.xo.je"
+        probe_to = os.getenv("HEALTHCHECK_TO", "founder@mellenth.tech")
         provider = ("SendGrid" if SENDGRID_API_KEY
                     else "Resend" if RESEND_API_KEY else None)
         if not provider:
@@ -474,9 +473,9 @@ Zero-Trust Sentinel"""
                   "DKIM/SPF cannot be verified.")
             return False
 
-        if FROM_EMAIL.split("@")[-1].strip().lower() != "zerodaysentinel.xo.je":
+        if FROM_EMAIL.split("@")[-1].strip().lower() != "mellenth.tech":
             print(f"[HEALTHCHECK] WARN: FROM_EMAIL={FROM_EMAIL} is not on "
-                  f"zerodaysentinel.xo.je - {provider} will reject this sender.")
+                  f"mellenth.tech - {provider} may reject this sender.")
 
         ok = await self._send_email(
             probe_to,
