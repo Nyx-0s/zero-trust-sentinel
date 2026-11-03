@@ -192,9 +192,7 @@ async def ensure_schema() -> None:
           (lead_task_id, company, domain, email, source, score, evidence, stage, marketing_consent, consent_source)
         SELECT t.id, COALESCE(NULLIF(t.name,''), t.domain, 'Unknown'),
                t.domain, NULLIF(t.email,''), 'sentinel-hunter',
-               COALESCE((SELECT r.risk_score FROM reports r
-                 JOIN clients c ON c.id = r.client_id
-                 WHERE c.domain = t.domain ORDER BY r.created_at DESC LIMIT 1), 0),
+               0,
                COALESCE(t.metadata, '{}'::jsonb),
                CASE WHEN t.status = 'suppressed' THEN 'suppressed'
                     WHEN t.status = 'hot' THEN 'qualified' ELSE 'new' END,
