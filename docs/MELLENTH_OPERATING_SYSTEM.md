@@ -53,3 +53,11 @@ These are third-party projects, not Mellenth-owned repositories. Their approache
 - Marketing consent is explicit and separate from a free assessment request. A discovered email address is not consent.
 - The existing outbound follow-up engine is restricted to records with marketing_consent=true.
 - Product contracts, prices, delivery capacity, and payment terms must be confirmed before proposals are issued.
+
+## Automatic reply ingestion (SendGrid)
+- The signed endpoint is `POST /webhook/sendgrid/inbound`. It verifies the ECDSA signature over the original timestamp and raw multipart body before parsing.
+- Set `SENDGRID_INBOUND_PUBLIC_KEY` in Vercel to the public key from the SendGrid Inbound Parse security policy. Do not disable signature verification.
+- Configure a dedicated receiving subdomain such as `parse.mellenth.tech` with MX `10 mx.sendgrid.net`; do not change the primary mailbox MX records. Configure SendGrid Inbound Parse to post to `https://<production-api>/webhook/sendgrid/inbound` and attach the signature security policy.
+- Point the outbound `REPLY_TO` at an address on that dedicated parse subdomain only after testing end-to-end. Keep the normal Titan/Gmail mailbox and MX records intact.
+- SendGrid's official docs: https://www.twilio.com/docs/sendgrid/for-developers/parsing-email/setting-up-the-inbound-parse-webhook and https://www.twilio.com/docs/sendgrid/api-reference/settings-inbound-parse/create-a-parse-webhook-security-policy.
+- Until the DNS, security policy, public key and reply-to routing are configured and tested, use the manual mobile reply form.
