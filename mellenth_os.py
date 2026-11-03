@@ -10,10 +10,15 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from email.utils import parseaddr
+import base64
+import re
+import time
+import html as html_lib
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -403,6 +408,54 @@ async def log_reply(body: ReplyCreate):
                     """, "reply_opt_out", prospect["lead_task_id"])
         return {"id": row["id"], "prospect_id": pid, "category": category,
                 "confidence": confidence, "summary": summary_text, "next_action": action}
+
+
+
+def _verify_sendgrid_inbound(raw_body: bytes, signature: str, timestamp: str) -> bool:
+    """Verify SendGrid's ECDSA signature over timestamp + untouched raw body."""
+    public_key_pem = os.getenv("SENDGRID_INBOUND_PUBLIC_KEY", "").strip()
+    if not public_key_pem or not signature or not timestamp:
+        return False
+    try:
+        if abs(time.time() - int(timestamp)) > 600:
+            return False
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+        key.verify(base64.b64decode(signature), timestamp.encode("utf-8") + raw_body,
+                   ec.ECDSA(hashes.SHA256()))
+        return True
+    except Exception:
+        return False
+
+@router.post("/webhook/sendgrid/inbound")
+async def sendgrid_inbound_parse(request: Request):
+    """Signed SendGrid Inbound Parse webhook. Never accepts unsigned payloads."""
+    raw = await request.body()
+    signature = request.headers.get("X-Twilio-Email-Event-Webhook-Signature", "")
+    timestamp = request.headers.get("X-Twilio-Email-Event-Webhook-Timestamp", "")
+    if not _verify_sendgrid_inbound(raw, signature, timestamp):
+        raise HTTPException(status_code=401, detail="invalid inbound webhook signature")
+    try:
+        form = await request.form()
+        sender = parseaddr(str(form.get("from", "")))[1].strip().lower()
+        subject = str(form.get("subject", ""))[:500]
+        body_text = str(form.get("text", "")).strip()
+        if not body_text:
+            body_text = html_lib.unescape(re.sub(r"<[^>]+>", " ", str(form.get("html", ""))))
+            body_text = re.sub(r"\s+", " ", body_text).strip()
+        if not sender or "@" not in sender or not body_text:
+            raise HTTPException(status_code=400, detail="sender and message body are required")
+        domain = sender.rsplit("@", 1)[-1]
+        result = await log_reply(ReplyCreate(email=sender, domain=domain,
+                                             subject=subject, body=body_text,
+                                             channel="email"))
+        return {"status": "accepted", "reply_id": result["id"],
+                "category": result["category"], "prospect_id": result["prospect_id"]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid inbound payload ({type(exc).__name__})")
 
 @router.get("/api/os/replies", dependencies=[Depends(operator_auth)])
 async def replies(limit: int = Query(50, ge=1, le=200)):
