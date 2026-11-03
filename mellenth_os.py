@@ -395,11 +395,11 @@ async def log_reply(body: ReplyCreate):
                 await conn.execute("UPDATE os_prospects SET marketing_consent=FALSE,consent_source=NULL WHERE id=$1", pid)
                 if prospect["lead_task_id"]:
                     await conn.execute("""
-                      UPDATE lead_tasks SET status='suppressed',marketing_consent=FALSE,
-                        consent_source=NULL,
-                        metadata=jsonb_set(COALESCE(metadata,'{}'::jsonb),'{reason}','"""+'"reply_opt_out"'+"""'::jsonb)
-                      WHERE id=$1
-                    """, prospect["lead_task_id"])
+                      UPDATE lead_tasks SET status='suppressed', marketing_consent=FALSE,
+                        consent_source=NULL, consent_at=NULL,
+                        metadata=jsonb_set(COALESCE(metadata,'{}'::jsonb),'{reason}',to_jsonb($1::text))
+                      WHERE id=$2
+                    """, "reply_opt_out", prospect["lead_task_id"])
         return {"id": row["id"], "prospect_id": pid, "category": category,
                 "confidence": confidence, "summary": summary_text, "next_action": action}
 
