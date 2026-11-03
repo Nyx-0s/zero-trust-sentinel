@@ -14,4 +14,4 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python -m py_compile api.py db.py mellenth_os.py
-      - run: python -m unittest tests.test_mellenth_os -v
+      - run: python -m unittest discover -s tests -p 'test_mellenth_os.py' -v
