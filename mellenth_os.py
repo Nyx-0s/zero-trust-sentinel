@@ -425,9 +425,11 @@ async def outreach_draft(prospect_id: int):
         p = await conn.fetchrow("SELECT * FROM os_prospects WHERE id=$1", prospect_id)
         if not p:
             raise HTTPException(status_code=404, detail="prospect not found")
-        evidence = p["evidence"] if isinstance(p["evidence"], dict) else {}
-        signal_list = evidence.get("signals", [])
-        proof = evidence.get("exposed_api_url") or evidence.get("staging_host") or ""
+        metadata = p["evidence"] if isinstance(p["evidence"], dict) else {}
+        signal_list = metadata.get("signals", [])
+        evidence = metadata.get("evidence", {}) if isinstance(metadata.get("evidence"), dict) else {}
+        proof = (evidence.get("exposed_api_url") or evidence.get("staging_host")
+                 or evidence.get("security_page") or "")
         subject = f"A practical idea for {p['company']}"
         body = (f"Hi {p['company']},\n\n"
                 "I came across your company while researching teams in your space. "
