@@ -1,0 +1,18 @@
+name: Mellenth operating system checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, mellenth-operating-system]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile api.py db.py mellenth_os.py
+      - run: python -m unittest discover -s tests -p 'test_mellenth_os.py' -v
+      - run: python test_autopilot.py

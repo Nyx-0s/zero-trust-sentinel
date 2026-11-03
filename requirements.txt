@@ -35,3 +35,6 @@ stripe>=8.0.0
 
 # Security tools would be installed system-wide via Go in Docker
 langchain-core
+# Signed SendGrid inbound parse webhook
+python-multipart>=0.0.9
+cryptography>=42.0.0

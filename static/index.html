@@ -189,6 +189,7 @@
             <div class="scan-input">
                 <input type="text" id="domain-input" placeholder="yourcompany.com" autocomplete="off">
                 <input type="email" id="email-input" placeholder="you@company.com" autocomplete="email">
+                <label class="small" style="display:flex;gap:.55rem;align-items:flex-start;margin:.65rem 0;"><input type="checkbox" id="marketing-consent" style="width:auto;margin-top:.2rem;"> <span>I agree to receive relevant product and service updates from Mellenth by email. I can unsubscribe at any time. Optional; not required for the assessment.</span></label>
                 <button class="btn btn-primary" id="scan-btn" onclick="startScan()">Run Assessment</button>
             </div>
             <p id="scan-status">Enter a domain. Your first score is free.</p>
@@ -674,7 +675,7 @@
             const res = await fetch(`${API_BASE}/capture`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ domain, email, name: 'Visitor' })
+                body: JSON.stringify({ domain, email, name: 'Visitor', marketing_consent: document.getElementById('marketing-consent').checked, consent_source: document.getElementById('marketing-consent').checked ? 'Website assessment form: explicit optional marketing checkbox' : '' })
             });
             const ctype = (res.headers.get('content-type') || '').toLowerCase();
             // Static hosting (InfinityFree) serves HTML here, not JSON: the

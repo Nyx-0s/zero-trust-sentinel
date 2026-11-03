@@ -42,6 +42,8 @@ from pydantic import BaseModel
 
 from main import run_scan
 from simulation import simulate_trajectory
+from mellenth_os import router as mellenth_router, ensure_schema as ensure_mellenth_schema
+
 from db import (
     create_client,
     get_pool,
@@ -111,10 +113,11 @@ STRIPE_SIGNATURE_ERROR = getattr(stripe, "SignatureVerificationError", ValueErro
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Zero-Trust Sentinel API",
-    description="Automated External Attack Surface Monitoring for SMBs",
-    version="1.0.0",
+    title="Mellenth Operations API",
+    description="Mellenth intelligence, security and automation operations",
+    version="1.1.0",
 )
+app.include_router(mellenth_router)
 
 # CORS: the cockpit (static/index.html) may be hosted on Vercel/Netlify while
 # the API runs on your server. Default allows any origin (safe: report data is
@@ -170,6 +173,8 @@ def _paypal_api_base() -> str:
 async def startup_event():
     """Initialize database on startup."""
     await init_db()
+    if os.getenv("DATABASE_URL"):
+        await ensure_mellenth_schema()
 
 
 class ScanRequest(BaseModel):
@@ -195,6 +200,9 @@ class LeadCapture(BaseModel):
     # open for a full analysis: defer=True records the lead and lets the
     # recovery sweep (or the next /task poll) run the scan.
     defer: bool = False
+    marketing_consent: bool = False
+    consent_source: str = ""
+    fit_score: int = 0
 
 
 def _coerce_client_id(raw: Any) -> Optional[int]:
@@ -358,11 +366,19 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
     task_email = ((lead.email or "").strip()
                   or ((client or {}).get("email") or "").strip())
     task_id = await create_lead_task(domain, task_email, lead.name)
+    if lead.marketing_consent and lead.consent_source.strip():
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("""UPDATE lead_tasks SET marketing_consent=TRUE,
+                consent_source=$1, consent_at=NOW() WHERE id=$2""",
+                lead.consent_source.strip()[:500], task_id)
 
     # 3b. Persist Harvey discovery signals so the Analyst/Editor prioritize them
     if lead.signals or lead.harvey_ref or lead.evidence:
         await set_lead_signals(task_id, lead.signals, lead.harvey_ref,
                                evidence=lead.evidence or None)
+    if lead.fit_score > 0:
+        await update_lead_task_metadata(task_id, {"fit_score": max(0, min(100, lead.fit_score))})
 
     # 4. If referred, apply the 1-month-free discount
     #    (coupons FK references clients.id; client exists from step 3)
