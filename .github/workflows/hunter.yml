@@ -31,4 +31,4 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SITE_URL: ${{ secrets.SITE_URL }}
           HUNTER_LIMIT: "10"
-        run: python hunter.py --api "$SITE_URL" --limit "$HUNTER_LIMIT"
+        run: python hunter.py --api "$SITE_URL" --csv marketing/icp_targets.csv --limit "$HUNTER_LIMIT" --defer
