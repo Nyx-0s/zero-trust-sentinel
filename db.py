@@ -876,6 +876,7 @@ async def get_inbound_leads(limit: int = 20) -> List[Dict[str, Any]]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM lead_tasks WHERE status IN ('completed', 'hot') "
+            "AND marketing_consent = TRUE "
             "AND email IS NOT NULL AND email <> '' "
             "ORDER BY updated_at ASC LIMIT $1", limit,
         )
