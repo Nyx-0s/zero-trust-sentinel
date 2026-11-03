@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from main import run_scan
 from simulation import simulate_trajectory
 from mellenth_os import router as mellenth_router, ensure_schema as ensure_mellenth_schema
+from vc_fundraising import router as vc_router, ensure_schema as ensure_vc_schema
 
 from db import (
     create_client,
@@ -118,6 +119,7 @@ app = FastAPI(
     version="1.1.0",
 )
 app.include_router(mellenth_router)
+app.include_router(vc_router)
 
 # CORS: the cockpit (static/index.html) may be hosted on Vercel/Netlify while
 # the API runs on your server. Default allows any origin (safe: report data is
@@ -175,6 +177,7 @@ async def startup_event():
     await init_db()
     if os.getenv("DATABASE_URL"):
         await ensure_mellenth_schema()
+        await ensure_vc_schema()
 
 
 class ScanRequest(BaseModel):

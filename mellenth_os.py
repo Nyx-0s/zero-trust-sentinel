@@ -463,12 +463,18 @@ async def sendgrid_inbound_parse(request: Request):
             body_text = re.sub(r"\s+", " ", body_text).strip()
         if not sender or "@" not in sender or not body_text:
             raise HTTPException(status_code=400, detail="sender and message body are required")
+        # Route VC replies to the investor pipeline before the customer CRM.
+        from vc_fundraising import record_investor_reply
+        investor_reply = await record_investor_reply(sender, subject, body_text, external_id)
+        if investor_reply:
+            return {"status": "accepted", "pipeline": "fundraising", **investor_reply}
         domain = sender.rsplit("@", 1)[-1]
         result = await log_reply(ReplyCreate(email=sender, domain=domain,
                                              subject=subject, body=body_text,
                                              channel="email", external_id=external_id))
-        return {"status": "accepted", "reply_id": result["id"],
-                "category": result["category"], "prospect_id": result["prospect_id"]}
+        return {"status": "accepted", "pipeline": "commercial",
+                "reply_id": result["id"], "category": result["category"],
+                "prospect_id": result["prospect_id"]}
     except HTTPException:
         raise
     except Exception as exc:
