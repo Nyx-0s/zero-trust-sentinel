@@ -11,6 +11,7 @@ import os
 from datetime import date
 from pathlib import Path
 from email.utils import parseaddr
+from email.parser import Parser
 import base64
 import re
 import time
@@ -109,6 +110,7 @@ class ReplyCreate(BaseModel):
     subject: str = Field(default="", max_length=500)
     body: str = Field(min_length=1, max_length=20000)
     channel: str = Field(default="email", max_length=40)
+    external_id: Optional[str] = Field(default=None, max_length=255)
 
 class DealCreate(BaseModel):
     prospect_id: int
@@ -159,6 +161,7 @@ async def ensure_schema() -> None:
           id BIGSERIAL PRIMARY KEY,
           prospect_id BIGINT REFERENCES os_prospects(id) ON DELETE SET NULL,
           sender_email VARCHAR(255) NOT NULL,
+          external_id VARCHAR(255) UNIQUE,
           subject TEXT NOT NULL DEFAULT '',
           body TEXT NOT NULL,
           channel VARCHAR(40) NOT NULL DEFAULT 'email',
@@ -168,6 +171,8 @@ async def ensure_schema() -> None:
           next_action TEXT NOT NULL DEFAULT '',
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        ALTER TABLE os_replies ADD COLUMN IF NOT EXISTS external_id VARCHAR(255);
+        CREATE UNIQUE INDEX IF NOT EXISTS os_replies_external_id_idx ON os_replies(external_id) WHERE external_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS os_replies_created_idx ON os_replies(created_at DESC);
         CREATE TABLE IF NOT EXISTS os_activities (
           id BIGSERIAL PRIMARY KEY,
@@ -374,6 +379,13 @@ async def log_reply(body: ReplyCreate):
     category, confidence, summary_text, action = classify_reply(body.body)
     pool = await get_pool()
     async with pool.acquire() as conn:
+        if body.external_id:
+            duplicate = await conn.fetchrow("SELECT id,category,prospect_id,summary,next_action FROM os_replies WHERE external_id=$1", body.external_id)
+            if duplicate:
+                return {"id": duplicate["id"], "prospect_id": duplicate["prospect_id"],
+                        "category": duplicate["category"], "confidence": 1.0,
+                        "summary": duplicate["summary"], "next_action": duplicate["next_action"],
+                        "duplicate": True}
         prospect = None
         if body.prospect_id:
             prospect = await conn.fetchrow("SELECT * FROM os_prospects WHERE id=$1", body.prospect_id)
@@ -385,9 +397,9 @@ async def log_reply(body: ReplyCreate):
             """, body.email.strip(), body.domain.strip().lower())
         pid = prospect["id"] if prospect else None
         row = await conn.fetchrow("""
-          INSERT INTO os_replies(prospect_id,sender_email,subject,body,channel,category,confidence,summary,next_action)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id
-        """, pid, body.email.strip().lower(), body.subject, body.body, body.channel,
+          INSERT INTO os_replies(prospect_id,sender_email,external_id,subject,body,channel,category,confidence,summary,next_action)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id
+        """, pid, body.email.strip().lower(), body.external_id, body.subject, body.body, body.channel,
              category, confidence, summary_text, action)
         if pid:
             stage = {"meeting_request":"meeting","interested":"replied",
@@ -440,6 +452,8 @@ async def sendgrid_inbound_parse(request: Request):
         form = await request.form()
         sender = parseaddr(str(form.get("from", "")))[1].strip().lower()
         subject = str(form.get("subject", ""))[:500]
+        raw_headers = str(form.get("headers", ""))
+        external_id = str(Parser().parsestr(raw_headers).get("Message-ID", "")).strip()[:255] or None
         body_text = str(form.get("text", "")).strip()
         if not body_text:
             body_text = html_lib.unescape(re.sub(r"<[^>]+>", " ", str(form.get("html", ""))))
@@ -449,7 +463,7 @@ async def sendgrid_inbound_parse(request: Request):
         domain = sender.rsplit("@", 1)[-1]
         result = await log_reply(ReplyCreate(email=sender, domain=domain,
                                              subject=subject, body=body_text,
-                                             channel="email"))
+                                             channel="email", external_id=external_id))
         return {"status": "accepted", "reply_id": result["id"],
                 "category": result["category"], "prospect_id": result["prospect_id"]}
     except HTTPException:
