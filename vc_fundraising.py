@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from db import get_pool
-from mellenth_os import operator_auth
+from mellenth_os import operator_auth, classify_reply
 
 router = APIRouter()
 VC_STAGES = {"new", "researching", "qualified", "draft_ready", "approved",
@@ -247,3 +247,31 @@ async def investor_replies(limit: int = Query(100, ge=1, le=200)):
           ORDER BY r.created_at DESC LIMIT $1
         """, limit)
         return [dict(r) for r in rows]
+
+
+async def record_investor_reply(sender_email: str, subject: str, body: str, external_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        investor = await conn.fetchrow("SELECT id,firm FROM os_investors WHERE lower(email)=lower($1) LIMIT 1", sender_email.strip())
+        if not investor:
+            return None
+        if external_id:
+            duplicate = await conn.fetchrow("SELECT id,category FROM os_investor_replies WHERE external_id=$1", external_id)
+            if duplicate:
+                return {"id": duplicate["id"], "category": duplicate["category"], "duplicate": True}
+        category, confidence, summary, next_action = classify_reply(body)
+        row = await conn.fetchrow("INSERT INTO os_investor_replies(investor_id,sender_email,external_id,subject,body,category,confidence,summary,next_action) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id", investor["id"], sender_email.strip().lower(), external_id, subject[:500], body[:20000], category, confidence, summary, next_action)
+        stage = {"meeting_request":"meeting", "interested":"replied", "objection":"replied", "not_interested":"passed", "opt_out":"suppressed", "out_of_office":"contacted"}.get(category, "replied")
+        await conn.execute("UPDATE os_investors SET stage=$1,outreach_approved=FALSE,updated_at=NOW() WHERE id=$2", stage, investor["id"])
+        return {"id":row["id"],"investor_id":investor["id"],"firm":investor["firm"],"category":category,"confidence":confidence,"summary":summary,"next_action":next_action,"duplicate":False}
+
+@router.post("/api/os/fundraising/replies", dependencies=[Depends(operator_auth)])
+async def log_investor_reply(body: dict[str, Any]):
+    sender = str(body.get("email", "")).strip().lower()
+    message = str(body.get("body", "")).strip()
+    if not _valid_email(sender) or not message:
+        raise HTTPException(status_code=400, detail="valid email and reply body are required")
+    result = await record_investor_reply(sender, str(body.get("subject", "")), message, str(body.get("external_id", "")) or None)
+    if not result:
+        raise HTTPException(status_code=404, detail="no investor matched this sender")
+    return result
