@@ -201,6 +201,7 @@ class LeadCapture(BaseModel):
     defer: bool = False
     marketing_consent: bool = False
     consent_source: str = ""
+    fit_score: int = 0
 
 
 def _coerce_client_id(raw: Any) -> Optional[int]:
@@ -375,6 +376,8 @@ async def capture_lead(lead: LeadCapture, ref: Optional[int] = None) -> Dict[str
     if lead.signals or lead.harvey_ref or lead.evidence:
         await set_lead_signals(task_id, lead.signals, lead.harvey_ref,
                                evidence=lead.evidence or None)
+    if lead.fit_score > 0:
+        await update_lead_task_metadata(task_id, {"fit_score": max(0, min(100, lead.fit_score))})
 
     # 4. If referred, apply the 1-month-free discount
     #    (coupons FK references clients.id; client exists from step 3)
