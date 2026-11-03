@@ -173,7 +173,8 @@ def _paypal_api_base() -> str:
 async def startup_event():
     """Initialize database on startup."""
     await init_db()
-    await ensure_mellenth_schema()
+    if os.getenv("DATABASE_URL"):
+        await ensure_mellenth_schema()
 
 
 class ScanRequest(BaseModel):
