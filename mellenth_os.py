@@ -232,7 +232,7 @@ async def os_health():
             "admin_token_configured": bool(_expected_token()),
             "email_sender_configured": bool(os.getenv("SENDGRID_API_KEY") or os.getenv("RESEND_API_KEY")),
             "llm_configured": bool(os.getenv("GROQ_API_KEY")),
-            "reply_ingestion": "manual-mobile-inbox until inbound mailbox webhook is configured"}
+            "reply_ingestion": ("signed-sendgrid-webhook-key-configured; verify DNS and SendGrid parse route" if os.getenv("SENDGRID_INBOUND_PUBLIC_KEY") else "manual-mobile-inbox; configure signed SendGrid Inbound Parse") }
 
 @router.get("/api/os/products", dependencies=[Depends(operator_auth)])
 async def products():
