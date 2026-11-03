@@ -252,24 +252,26 @@ async def summary():
         await _sync_prospects(conn)
         rows = await conn.fetch("SELECT stage, count(*) AS n FROM os_prospects GROUP BY stage")
         pipeline = {r["stage"]: int(r["n"]) for r in rows}
-        deals = await conn.fetchrow("""
-          SELECT count(*) AS total,
-          COALESCE(sum(value_amount) FILTER (WHERE stage NOT IN ('won','lost')),0) AS pipeline_value,
-          COALESCE(sum(value_amount) FILTER (WHERE stage='won'),0) AS won_value,
-          count(*) FILTER (WHERE stage='won') AS won_count
-          FROM os_deals
+        deals = await conn.fetch("""
+          SELECT currency,
+            count(*) AS total,
+            COALESCE(sum(value_amount) FILTER (WHERE stage NOT IN ('won','lost')),0) AS pipeline_value,
+            COALESCE(sum(value_amount) FILTER (WHERE stage='won'),0) AS won_value,
+            count(*) FILTER (WHERE stage='won') AS won_count
+          FROM os_deals GROUP BY currency ORDER BY currency
         """)
         replies = await conn.fetchrow("SELECT count(*) AS total, max(created_at) AS last_reply FROM os_replies")
         activity = await conn.fetchrow("SELECT max(created_at) AS last_activity FROM os_activities")
         subs = await conn.fetchrow("SELECT count(*) AS n FROM subscriptions WHERE status='active'")
         return {
           "prospects_total": sum(pipeline.values()), "pipeline": pipeline,
-          "replies_total": int(replies["total"]), "deals_total": int(deals["total"]),
-          "pipeline_value": float(deals["pipeline_value"]), "won_value": float(deals["won_value"]),
-          "won_count": int(deals["won_count"]), "active_subscriptions": int(subs["n"]),
+          "replies_total": int(replies["total"]), "deals_total": sum(int(d["total"]) for d in deals),
+          "pipeline_value_by_currency": {d["currency"].strip(): float(d["pipeline_value"]) for d in deals},
+          "won_value_by_currency": {d["currency"].strip(): float(d["won_value"]) for d in deals},
+          "won_count": sum(int(d["won_count"]) for d in deals), "active_subscriptions": int(subs["n"]),
           "last_reply": replies["last_reply"].isoformat() if replies["last_reply"] else None,
           "last_activity": activity["last_activity"].isoformat() if activity["last_activity"] else None,
-          "currency_note": "Deal values retain their own currency; totals are not FX-converted."
+          "currency_note": "Deal values are grouped by currency; no FX conversion is performed."
         }
 
 @router.get("/api/os/prospects", dependencies=[Depends(operator_auth)])
