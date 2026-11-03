@@ -249,7 +249,7 @@ def groq_qualify(client: httpx.Client, api_key: str, industry: str,
 # --- Submission (harvey_discovery.md field contract) -------------------------
 
 def submit(api_base: str, domain: str, signals: List[str],
-           harvey_ref: str, email: str = "",
+           harvey_ref: str, email: str = "", fit_score: int = 0,
            evidence: Optional[Dict[str, Any]] = None,
            defer: bool = False) -> Tuple[bool, str]:
     """POST /capture with an honest contract.
@@ -269,7 +269,7 @@ def submit(api_base: str, domain: str, signals: List[str],
     url = f"{api_base.rstrip('/')}/capture"
     payload: Dict[str, Any] = {
         "domain": domain, "email": email, "name": "Discovered by Hunter",
-        "signals": signals, "harvey_ref": harvey_ref,
+        "signals": signals, "harvey_ref": harvey_ref, "fit_score": max(0, min(100, int(fit_score))),
     }
     if evidence:
         payload["evidence"] = evidence
@@ -360,9 +360,12 @@ def run_hunt(api: str, csv_path: str = "marketing/seed_leads.csv",
             proof = evidence.get("exposed_api_url") or evidence.get("staging_host") or "-"
             contact, contact_source = find_contact_email(
                 client, domain, evidence.get("homepage_text", ""))
+            fit_score = min(100, 25 + (20 * len(real)) + (10 if contact else 0)
+                            + (5 if evidence.get("homepage_text") else 0))
             if contact_source:
                 evidence["contact_source"] = contact_source
             print(f"  {domain:<16} QUALIFIED   signals={signals} proof={proof}")
+            print(f"      fit score: {fit_score}/100")
             print(f"      contact: {contact or '(none published - scan only, never mailed)'}"
                   + (f" via {contact_source}" if contact_source else ""))
             if dry_run:
@@ -371,8 +374,8 @@ def run_hunt(api: str, csv_path: str = "marketing/seed_leads.csv",
             else:
                 try:
                     ok, detail = submit(api, domain, signals, harvey_ref,
-                                        email=contact, evidence=evidence,
-                                        defer=defer)
+                                        email=contact, fit_score=fit_score,
+                                        evidence=evidence, defer=defer)
                 except Exception as exc:  # a submit must never crash the hunt
                     ok, detail = (False,
                                   f"API unreachable or shielded: "
