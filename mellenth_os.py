@@ -192,7 +192,7 @@ async def ensure_schema() -> None:
           (lead_task_id, company, domain, email, source, score, evidence, stage, marketing_consent, consent_source)
         SELECT t.id, COALESCE(NULLIF(t.name,''), t.domain, 'Unknown'),
                t.domain, NULLIF(t.email,''), 'sentinel-hunter',
-               0,
+               COALESCE(NULLIF(t.metadata->>'fit_score','')::int, 0),
                COALESCE(t.metadata, '{}'::jsonb),
                CASE WHEN t.status = 'suppressed' THEN 'suppressed'
                     WHEN t.status = 'hot' THEN 'qualified' ELSE 'new' END,
@@ -230,16 +230,17 @@ async def products():
 
 async def _sync_prospects(conn) -> None:
     await conn.execute("""
-      INSERT INTO os_prospects (lead_task_id, company, domain, email, source, evidence, stage, marketing_consent, consent_source)
+      INSERT INTO os_prospects (lead_task_id, company, domain, email, source, score, evidence, stage, marketing_consent, consent_source)
       SELECT t.id, COALESCE(NULLIF(t.name,''), t.domain, 'Unknown'), t.domain,
-             NULLIF(t.email,''), 'sentinel-hunter', COALESCE(t.metadata,'{}'::jsonb),
+             NULLIF(t.email,''), 'sentinel-hunter', COALESCE(NULLIF(t.metadata->>'fit_score','')::int,0), COALESCE(t.metadata,'{}'::jsonb),
              CASE WHEN t.status='suppressed' THEN 'suppressed'
                   WHEN t.status='hot' THEN 'qualified' ELSE 'new' END,
              t.marketing_consent, t.consent_source
       FROM lead_tasks t
       ON CONFLICT (lead_task_id) DO UPDATE SET
         email=COALESCE(NULLIF(EXCLUDED.email,''),os_prospects.email),
-        evidence=EXCLUDED.evidence, marketing_consent=EXCLUDED.marketing_consent,
+        evidence=EXCLUDED.evidence, score=GREATEST(os_prospects.score,EXCLUDED.score),
+        marketing_consent=EXCLUDED.marketing_consent,
         consent_source=EXCLUDED.consent_source, updated_at=NOW()
     """)
 
