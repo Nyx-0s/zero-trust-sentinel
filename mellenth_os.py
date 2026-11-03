@@ -409,6 +409,9 @@ async def log_reply(body: ReplyCreate):
                 await conn.execute("UPDATE os_prospects SET stage=$1,marketing_consent=CASE WHEN $1='suppressed' THEN FALSE ELSE marketing_consent END,updated_at=NOW() WHERE id=$2", stage, pid)
                 await conn.execute("INSERT INTO os_activities(prospect_id,kind,detail) VALUES($1,'reply',$2)",
                                    pid, category + ": " + summary_text)
+            if prospect["lead_task_id"] and category != "opt_out":
+                # Any human reply pauses the automated sequence; a human owns the conversation now.
+                await conn.execute("UPDATE lead_tasks SET status='replied' WHERE id=$1 AND status <> 'suppressed'", prospect["lead_task_id"])
             if category == "opt_out":
                 await conn.execute("UPDATE os_prospects SET marketing_consent=FALSE,consent_source=NULL WHERE id=$1", pid)
                 if prospect["lead_task_id"]:
