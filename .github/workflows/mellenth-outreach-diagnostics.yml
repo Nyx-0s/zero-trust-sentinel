@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Install database diagnostic dependency
+        run: pip install asyncpg
       - name: Diagnose lead eligibility and sender readiness
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
