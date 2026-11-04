@@ -16,27 +16,14 @@ jobs:
     steps:
       - name: Install database diagnostic dependency
         run: pip install asyncpg
-      - name: Diagnose lead eligibility and sender readiness
+      - name: Diagnose lead eligibility and webhook readiness
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          REPLY_TO: ${{ secrets.REPLY_TO }}
-          TEST_TO: aryan.ahlawat@rftsystems.com
         run: |
           python - <<'PY'
           import os, json, urllib.request, urllib.error
-          from urllib.parse import quote
           key=os.getenv("SENDGRID_API_KEY","")
-          sender=os.getenv("FROM_EMAIL","")
-          reply=os.getenv("REPLY_TO","")
-          print("CONFIG", json.dumps({
-            "database_url_present": bool(os.getenv("DATABASE_URL")),
-            "sendgrid_key_present": bool(key),
-            "from_email_present": bool(sender),
-            "reply_to_present": bool(reply),
-            "test_recipient": os.getenv("TEST_TO")
-          }))
           if os.getenv("DATABASE_URL"):
             try:
               import asyncio, asyncpg
@@ -49,66 +36,31 @@ jobs:
                     ORDER BY status, consent
                   """)
                   print("LEAD_COUNTS", json.dumps([dict(r) for r in rows], default=str))
-                  sent=await conn.fetchval("SELECT count(*) FROM lead_stages WHERE sent_at >= date_trunc('day', NOW())")
-                  print("SENDS_TODAY_DB", sent)
-                  suppressed=await conn.fetchval("SELECT count(*) FROM lead_tasks WHERE status='suppressed'")
-                  print("SUPPRESSED_LEADS", suppressed)
+                  print("SENDS_TODAY_DB", await conn.fetchval("SELECT count(*) FROM lead_stages WHERE sent_at >= date_trunc('day', NOW())"))
                 finally:
                   await conn.close()
               asyncio.run(dbcheck())
             except Exception as e:
               print("DB_DIAGNOSTIC_ERROR", type(e).__name__, str(e)[:300])
           else:
-            print("DB_DIAGNOSTIC_SKIPPED: DATABASE_URL secret missing in GitHub Actions")
+            print("DB_DIAGNOSTIC_SKIPPED")
           if not key:
-            print("SENDGRID_CHECK=HOLD: GitHub Actions SENDGRID_API_KEY secret missing")
+            print("SENDGRID_API_KEY_MISSING")
             raise SystemExit(0)
-          def sg(method,path,payload=None):
-            data=None if payload is None else json.dumps(payload).encode()
-            req=urllib.request.Request("https://api.sendgrid.com"+path,data=data,method=method,
-              headers={"Authorization":"Bearer "+key,"Content-Type":"application/json"})
-            try:
-              with urllib.request.urlopen(req,timeout=20) as res:
-                raw=res.read().decode()
-                return res.status, json.loads(raw) if raw else {}
-            except urllib.error.HTTPError as e:
-              body=e.read().decode(errors="replace")
-              return e.code, body[:500]
-          domain=sender.split("@")[-1].lower() if "@" in sender else ""
-          code,domains=sg("GET","/v3/whitelabel/domains?domain="+quote(domain))
-          print("DOMAIN_AUTH_HTTP",code)
-          verified_domain=False
-          if code==200 and isinstance(domains,list):
-            for d in domains:
-              print("DOMAIN_AUTH",json.dumps({k:d.get(k) for k in ("domain","valid","legacy","default","automatic_security")}))
-              verified_domain |= bool(d.get("valid"))
-          code2,senders=sg("GET","/v3/verified_senders")
-          print("SENDER_AUTH_HTTP",code2)
-          verified_sender=False
-          if code2==200 and isinstance(senders,dict):
-            for x in senders.get("results",[]):
-              if (x.get("from_email","").lower()==sender.lower()):
-                print("SENDER_AUTH_MATCH",json.dumps({"email":x.get("from_email"),"verified":x.get("verified")}))
-                verified_sender=bool(x.get("verified"))
-          if not (verified_domain or verified_sender):
-            print("SENDGRID_CHECK=HOLD: no verified authenticated domain or verified sender matched FROM_EMAIL")
-            raise SystemExit(0)
-          print("SENDGRID_CHECK=GO: sender identity verified")
-          payload={
-            "personalizations":[{"to":[{"email":os.environ["TEST_TO"]}]}],
-            "from":{"email":sender,"name":"Mellenth Delivery Test"},
-            "reply_to":{"email":reply} if reply else {"email":sender},
-            "subject":"Mellenth outbound delivery verification",
-            "content":[{"type":"text/plain","value":"This is a founder-authorized delivery test for Mellenth. No prospect data is included. Please confirm receipt."}],
-            "custom_args":{"mellenth_diagnostic":"founder-self-test"},
-            "tracking_settings":{"open_tracking":{"enable":False},"click_tracking":{"enable":False}}
-          }
-          code3,result=sg("POST","/v3/mail/send",payload)
-          print("TEST_SEND_HTTP",code3,"ACCEPTED" if code3==202 else str(result)[:500])
-          if code3==202:
-            print("TEST_SEND=PROVIDER_ACCEPTED; final inbox delivery requires a delivered event or mailbox confirmation")
-          event_code,event_cfg=sg("GET","/v3/user/webhooks/event/settings")
-          print("EVENT_WEBHOOK_HTTP",event_code)
-          if event_code==200 and isinstance(event_cfg,dict):
-            print("EVENT_WEBHOOK",json.dumps({k:event_cfg.get(k) for k in ("enabled","url","group_resubscribe","delivered","bounce","deferred","processed") if k in event_cfg}))\n  print("EVENT_WEBHOOK_PUBLIC_KEY_PRESENT",bool(event_cfg.get("public_key")))
-          try:\n            req=urllib.request.Request("https://zero-trust-sentinel-opal-lake.vercel.app/webhooks/sendgrid/events",data=b"[]",headers={"Content-Type":"application/json"},method="POST")\n            with urllib.request.urlopen(req,timeout=15) as res: print("EVENT_ENDPOINT_POST_STATUS",res.status)\n          except urllib.error.HTTPError as e: print("EVENT_ENDPOINT_POST_STATUS",e.code)\n          except Exception as e: print("EVENT_ENDPOINT_CHECK_ERROR",type(e).__name__)\n          PY
+          req=urllib.request.Request("https://api.sendgrid.com/v3/user/webhooks/event/settings",headers={"Authorization":"Bearer "+key})
+          try:
+            with urllib.request.urlopen(req,timeout=20) as res:
+              cfg=json.loads(res.read().decode())
+              print("EVENT_WEBHOOK",json.dumps({k:cfg.get(k) for k in ("enabled","url","delivered","bounce","deferred","processed") if k in cfg}))
+              print("EVENT_WEBHOOK_PUBLIC_KEY_PRESENT",bool(cfg.get("public_key")))
+          except urllib.error.HTTPError as e:
+            print("EVENT_WEBHOOK_HTTP",e.code)
+          try:
+            req=urllib.request.Request("https://zero-trust-sentinel-opal-lake.vercel.app/webhooks/sendgrid/events",data=b"[]",headers={"Content-Type":"application/json"},method="POST")
+            with urllib.request.urlopen(req,timeout=15) as res:
+              print("CURRENT_EVENT_ENDPOINT_POST_STATUS",res.status)
+          except urllib.error.HTTPError as e:
+            print("CURRENT_EVENT_ENDPOINT_POST_STATUS",e.code)
+          except Exception as e:
+            print("CURRENT_EVENT_ENDPOINT_CHECK_ERROR",type(e).__name__)
+          PY
