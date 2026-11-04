@@ -110,5 +110,5 @@ jobs:
           event_code,event_cfg=sg("GET","/v3/user/webhooks/event/settings")
           print("EVENT_WEBHOOK_HTTP",event_code)
           if event_code==200 and isinstance(event_cfg,dict):
-            print("EVENT_WEBHOOK",json.dumps({k:event_cfg.get(k) for k in ("enabled","url","group_resubscribe","delivered","bounce","deferred","processed") if k in event_cfg}))
-          PY
+            print("EVENT_WEBHOOK",json.dumps({k:event_cfg.get(k) for k in ("enabled","url","group_resubscribe","delivered","bounce","deferred","processed") if k in event_cfg}))\n  print("EVENT_WEBHOOK_PUBLIC_KEY_PRESENT",bool(event_cfg.get("public_key")))
+          try:\n            req=urllib.request.Request("https://zero-trust-sentinel-opal-lake.vercel.app/webhooks/sendgrid/events",data=b"[]",headers={"Content-Type":"application/json"},method="POST")\n            with urllib.request.urlopen(req,timeout=15) as res: print("EVENT_ENDPOINT_POST_STATUS",res.status)\n          except urllib.error.HTTPError as e: print("EVENT_ENDPOINT_POST_STATUS",e.code)\n          except Exception as e: print("EVENT_ENDPOINT_CHECK_ERROR",type(e).__name__)\n          PY
